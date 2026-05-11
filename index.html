@@ -299,7 +299,6 @@ function App(){
         </div>
       </div>
       <div style={s.body}>
-        <SyncBar status={syncStatus} code={syncCode} accent={W.accent} onClick={()=>setSyncOpen(true)}/>
         {activeDay
           ? <DayDetail
               d={activeDay}
@@ -379,6 +378,7 @@ function App(){
                 </div>
               ))}
             </div>
+            <SyncBar status={syncStatus} code={syncCode} accent={W.accent} onClick={()=>setSyncOpen(true)}/>
           </>
         }
       </div>
@@ -395,20 +395,15 @@ function App(){
 }
 
 function SyncBar({status,code,accent,onClick}){
-  let icon="📱",label="Local only — Enable sync",sub="";
-  if(status==="connecting"){icon="☁️";label="Connecting…";}
-  else if(status==="synced"){icon="☁️";label="Synced across devices";sub=code;}
-  else if(status==="error"){icon="⚠️";label="Sync error — tap to retry";}
+  let icon="📱",label="Local only",action="Enable sync";
+  if(status==="connecting"){icon="☁️";label="Connecting…";action="";}
+  else if(status==="synced"){icon="☁️";label="Synced";action="Manage";}
+  else if(status==="error"){icon="⚠️";label="Sync error";action="Retry";}
   return(
-    <button onClick={onClick} style={{width:"100%",background:"#fff",border:"none",borderRadius:12,padding:"10px 14px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
-      <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flex:1}}>
-        <span style={{fontSize:16,flexShrink:0}}>{icon}</span>
-        <div style={{textAlign:"left",minWidth:0,flex:1}}>
-          <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E"}}>{label}</div>
-          {sub&&<div style={{fontSize:11,color:"#8E8E93",fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</div>}
-        </div>
-      </div>
-      <span style={{fontSize:12,color:accent,fontWeight:600,flexShrink:0,marginLeft:8}}>{status==="synced"?"Manage":"Set up"} →</span>
+    <button onClick={onClick} style={{width:"100%",background:"transparent",border:"none",padding:"6px 8px 18px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+      <span style={{fontSize:13,flexShrink:0,opacity:0.7}}>{icon}</span>
+      <span style={{fontSize:12,fontWeight:500,color:"#8E8E93"}}>{label}</span>
+      {action&&<span style={{fontSize:12,color:accent,fontWeight:600}}>· {action}</span>}
     </button>
   );
 }
