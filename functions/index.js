@@ -11,7 +11,6 @@ const messaging = getMessaging();
 setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 
 const APP_URL = 'https://ed10000mil.github.io/lilianfeld-plan/';
-const ICON_URL = 'https://ed10000mil.github.io/lilianfeld-plan/icon-192.png';
 
 exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
   const snap = event.data;
@@ -62,12 +61,12 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
   const body = `${taskText || 'a task'} · Day ${dayNum || '?'}${
     dayTitle ? ': ' + dayTitle : ''
   }`;
-
-  // Deep link → opens straight to the task's day detail view
   const deepLink = `${APP_URL}?day=${encodeURIComponent(dayNum || '')}&task=${encodeURIComponent(taskKey || '')}`;
 
+  // DATA-ONLY message: no `notification` field, no `webpush.notification`.
+  // The service worker's onBackgroundMessage will display the notification
+  // with full control over appearance — no iOS auto-added "from [PWA name]".
   const message = {
-    notification: { title, body },
     data: {
       title,
       body,
@@ -76,11 +75,8 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
       link: deepLink,
     },
     webpush: {
-      notification: {
-        icon: ICON_URL,
-        badge: ICON_URL,
-        tag: `task-${taskKey || event.params.pingId}`,
-        renotify: true,
+      headers: {
+        Urgency: 'high',
       },
       fcmOptions: {
         link: deepLink,

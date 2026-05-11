@@ -10,33 +10,40 @@ firebase.initializeApp({
   appId: "1:1098965869642:web:c42ba903109c8a4b5a32b3"
 });
 
-// FCM's built-in handler auto-displays the `notification` payload.
-// We do NOT register a custom onBackgroundMessage handler (that would
-// cause a duplicate notification).
-firebase.messaging();
+const messaging = firebase.messaging();
 
-// Notification click → focus existing PWA window if open, deep-link to task,
-// or open a fresh window with the task URL.
+// Cloud Function sends data-only messages, so onBackgroundMessage fires
+// and we show our own notification with full control — no iOS-injected
+// "from [PWA name]" subtitle, no duplicate display.
+messaging.onBackgroundMessage(payload => {
+  const data = payload.data || {};
+  const title = data.title || 'Lilianfeld';
+  const iconUrl = new URL('icon-192.png', self.registration.scope).href;
+
+  return self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: iconUrl,
+    badge: iconUrl,
+    tag: data.taskKey ? `task-${data.taskKey}` : undefined,
+    renotify: true,
+    data: data
+  });
+});
+
+// Notification tap → focus existing PWA window and deep-link to the task,
+// or open a new window directly at the task URL.
 self.addEventListener('notificationclick', event => {
   event.notification.close();
 
   const data = event.notification.data || {};
-  const fcmData = (data.FCM_MSG && data.FCM_MSG.data) || {};
-
-  const taskKey = fcmData.taskKey || data.taskKey || '';
-  const dayNum  = fcmData.dayNum  || data.dayNum  || '';
-
-  const baseUrl = self.registration.scope; // e.g. https://.../lilianfeld-plan/
-  const deepLink = (dayNum || taskKey)
-    ? `${baseUrl}?day=${encodeURIComponent(dayNum)}&task=${encodeURIComponent(taskKey)}`
-    : baseUrl;
+  const taskKey = data.taskKey || '';
+  const dayNum  = data.dayNum  || '';
+  const link    = data.link    || self.registration.scope;
 
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-
-    // If the app already has a window, focus it and tell it where to go.
     for (const c of allClients) {
-      if (c.url.startsWith(baseUrl)) {
+      if (c.url.startsWith(self.registration.scope)) {
         await c.focus();
         if (dayNum || taskKey) {
           c.postMessage({
@@ -48,10 +55,8 @@ self.addEventListener('notificationclick', event => {
         return;
       }
     }
-
-    // Otherwise open a new window directly at the deep link.
     if (clients.openWindow) {
-      return clients.openWindow(deepLink);
+      return clients.openWindow(link);
     }
   })());
 });

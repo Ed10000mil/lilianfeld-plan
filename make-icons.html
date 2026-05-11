@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Lilianfeld Icon Maker</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:#F2F2F7;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;color:#1C1C1E;padding:24px;line-height:1.5;min-height:100vh}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:24px;font-weight:700;letter-spacing:-0.4px;margin-bottom:6px}
+  .sub{color:#8E8E93;font-size:14px;margin-bottom:24px}
+  .card{background:#fff;border-radius:18px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:16px}
+  .row{display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+  .col{flex:1;min-width:220px}
+  label{display:block;font-size:11px;font-weight:700;color:#8E8E93;letter-spacing:0.4px;text-transform:uppercase;margin-bottom:6px}
+  input[type=color]{width:48px;height:36px;border:1px solid #E5E5EA;border-radius:8px;cursor:pointer;background:none;padding:2px}
+  input[type=range]{flex:1;accent-color:#007AFF}
+  input[type=file]{display:none}
+  .file-btn{display:inline-block;background:#007AFF;color:#fff;border:none;padding:11px 18px;border-radius:11px;font-weight:600;font-size:14px;cursor:pointer}
+  .preset-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .preset{padding:8px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #E5E5EA;background:#fff;display:flex;align-items:center;gap:6px}
+  .preset-swatch{width:14px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,0.1)}
+  .preview-grid{display:grid;grid-template-columns:auto auto auto;gap:20px;justify-content:center;align-items:center;padding:8px 0}
+  .preview-cell{text-align:center}
+  .preview-cell canvas{display:block;border-radius:22.5%;box-shadow:0 8px 24px rgba(0,0,0,0.18);background:#fff;margin-bottom:8px}
+  .preview-cell .label{font-size:11px;font-weight:600;color:#8E8E93;text-transform:uppercase;letter-spacing:0.4px}
+  .download-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px}
+  .download-row button{background:#007AFF;color:#fff;border:none;padding:13px;border-radius:12px;font-weight:600;font-size:14px;cursor:pointer}
+  .download-row button:disabled{background:#E5E5EA;color:#8E8E93;cursor:not-allowed}
+  .toggle-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  input[type=number]{border:1px solid #E5E5EA;border-radius:8px;padding:7px 10px;width:70px;font-size:14px;font-family:inherit}
+  .drop-zone{border:2px dashed #C7C7CC;border-radius:14px;padding:30px;text-align:center;cursor:pointer;transition:all 0.2s}
+  .drop-zone.dragover{border-color:#007AFF;background:#F0F8FF}
+  .drop-zone .icon{font-size:36px;margin-bottom:8px}
+  .drop-zone p{color:#8E8E93;font-size:14px}
+  .small{font-size:12px;color:#8E8E93}
+  .check-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .check-row input{accent-color:#007AFF;width:18px;height:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🕯 Lilianfeld Icon Maker</h1>
+  <p class="sub">Upload your logo, pick a background, preview, download. Drop the three PNGs into your repo and you're done.</p>
+
+  <div class="card">
+    <div id="dropZone" class="drop-zone">
+      <div class="icon">📁</div>
+      <p><strong>Click to upload</strong> or drag & drop your logo</p>
+      <p class="small" style="margin-top:6px">PNG or JPG. Higher resolution gives sharper icons.</p>
+    </div>
+    <input type="file" id="upload" accept="image/*"/>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div class="col">
+        <label>Background color</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <input type="color" id="bgColor" value="#EDE5D2"/>
+          <span class="small" id="bgHex">#EDE5D2</span>
+        </div>
+        <div class="preset-row">
+          <button class="preset" data-color="#D5D0C5"><span class="preset-swatch" style="background:#D5D0C5"></span>Warm gray</button>
+          <button class="preset" data-color="#C8C2B6"><span class="preset-swatch" style="background:#C8C2B6"></span>Stone</button>
+          <button class="preset" data-color="#DDD6CC"><span class="preset-swatch" style="background:#DDD6CC"></span>Taupe</button>
+          <button class="preset" data-color="#EDE5D2"><span class="preset-swatch" style="background:#EDE5D2"></span>Cream</button>
+          <button class="preset" data-color="#F5F0E5"><span class="preset-swatch" style="background:#F5F0E5"></span>Ivory</button>
+          <button class="preset" data-color="#D4B886"><span class="preset-swatch" style="background:#D4B886"></span>Gold</button>
+          <button class="preset" data-color="#1C1C1E"><span class="preset-swatch" style="background:#1C1C1E"></span>Charcoal</button>
+          <button class="preset" data-color="#3A3A3C"><span class="preset-swatch" style="background:#3A3A3C"></span>Slate</button>
+        </div>
+      </div>
+      <div class="col">
+        <label>Padding around logo</label>
+        <div class="toggle-row">
+          <input type="range" id="padding" min="0" max="30" value="12"/>
+          <input type="number" id="paddingNum" min="0" max="30" value="12"/>
+          <span class="small">%</span>
+        </div>
+        <label style="margin-top:14px">Remove white background</label>
+        <div class="check-row">
+          <input type="checkbox" id="removeWhite" checked/>
+          <span class="small">Fade out the source's white background so the logo blends onto your color</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Preview</label>
+    <div class="preview-grid">
+      <div class="preview-cell">
+        <canvas id="prev180" width="180" height="180"></canvas>
+        <div class="label">180 × 180</div>
+      </div>
+      <div class="preview-cell">
+        <canvas id="prev192" width="192" height="192"></canvas>
+        <div class="label">192 × 192</div>
+      </div>
+      <div class="preview-cell">
+        <canvas id="prev512" width="256" height="256"></canvas>
+        <div class="label">512 × 512 (shown smaller)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Download</label>
+    <div class="download-row">
+      <button id="dl180" disabled>icon-180.png</button>
+      <button id="dl192" disabled>icon-192.png</button>
+      <button id="dl512" disabled>icon-512.png</button>
+    </div>
+    <p class="small" style="margin-top:14px">After downloading, move all three files into <code>~/lilianfeld-plan/</code> (replacing the existing ones), then run:</p>
+    <pre style="background:#1C1C1E;color:#EBEBF5;padding:12px 14px;border-radius:10px;margin-top:8px;font-size:12px;overflow-x:auto"><code>cd ~/lilianfeld-plan
+git add icon-*.png && git commit -m "Refresh app icon" && git push</code></pre>
+  </div>
+</div>
+
+<script>
+let sourceImage = null;
+
+const bgColor = document.getElementById('bgColor');
+const bgHex = document.getElementById('bgHex');
+const padding = document.getElementById('padding');
+const paddingNum = document.getElementById('paddingNum');
+const removeWhite = document.getElementById('removeWhite');
+const upload = document.getElementById('upload');
+const dropZone = document.getElementById('dropZone');
+
+// Sync padding range + number
+padding.addEventListener('input', ()=>{ paddingNum.value = padding.value; render(); });
+paddingNum.addEventListener('input', ()=>{ padding.value = paddingNum.value; render(); });
+bgColor.addEventListener('input', ()=>{ bgHex.textContent = bgColor.value.toUpperCase(); render(); });
+removeWhite.addEventListener('input', render);
+document.querySelectorAll('.preset').forEach(b=>{
+  b.addEventListener('click', ()=>{ bgColor.value = b.dataset.color; bgHex.textContent = b.dataset.color.toUpperCase(); render(); });
+});
+
+dropZone.addEventListener('click', ()=>upload.click());
+dropZone.addEventListener('dragover', e=>{e.preventDefault();dropZone.classList.add('dragover');});
+dropZone.addEventListener('dragleave', ()=>dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e=>{
+  e.preventDefault();dropZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0]; if(f) loadFile(f);
+});
+upload.addEventListener('change', e=>{ const f=e.target.files[0]; if(f) loadFile(f); });
+
+function loadFile(file){
+  const reader = new FileReader();
+  reader.onload = e=>{
+    const img = new Image();
+    img.onload = ()=>{
+      sourceImage = img;
+      dropZone.innerHTML = `<div class="icon">✅</div><p><strong>${file.name}</strong> loaded</p><p class="small" style="margin-top:6px">${img.width} × ${img.height} pixels — click to replace</p>`;
+      render();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function hexToRgb(hex){
+  const v = parseInt(hex.slice(1),16);
+  return [(v>>16)&255, (v>>8)&255, v&255];
+}
+
+function renderToCanvas(canvas, displaySize, exportSize){
+  const ctx = canvas.getContext('2d');
+  canvas.width = displaySize;
+  canvas.height = displaySize;
+  const [r,g,b] = hexToRgb(bgColor.value);
+  ctx.fillStyle = bgColor.value;
+  ctx.fillRect(0,0,displaySize,displaySize);
+
+  if(!sourceImage) return;
+
+  const padPct = parseInt(padding.value,10) / 100;
+  const inner = displaySize * (1 - padPct*2);
+  const aspect = sourceImage.width / sourceImage.height;
+  let w, h;
+  if(aspect >= 1){ w = inner; h = inner / aspect; }
+  else{ h = inner; w = inner * aspect; }
+  const x = (displaySize - w) / 2;
+  const y = (displaySize - h) / 2;
+
+  if(removeWhite.checked){
+    // Render to offscreen canvas, fade whites to transparent, then composite
+    const off = document.createElement('canvas');
+    off.width = w;
+    off.height = h;
+    const offCtx = off.getContext('2d');
+    offCtx.drawImage(sourceImage, 0, 0, w, h);
+    const data = offCtx.getImageData(0,0,w,h);
+    const px = data.data;
+    const T = 230; // threshold
+    for(let i=0; i<px.length; i+=4){
+      const rr=px[i], gg=px[i+1], bb=px[i+2];
+      if(rr>=T && gg>=T && bb>=T){
+        const bright = (rr+gg+bb)/3;
+        const fade = bright >= 255 ? 0 : (255-bright)/(255-T);
+        px[i+3] = Math.round(255 * fade) * (px[i+3]/255);
+      }
+    }
+    offCtx.putImageData(data, 0, 0);
+    ctx.drawImage(off, x, y);
+  } else {
+    ctx.drawImage(sourceImage, x, y, w, h);
+  }
+}
+
+function render(){
+  renderToCanvas(document.getElementById('prev180'), 180, 180);
+  renderToCanvas(document.getElementById('prev192'), 192, 192);
+  renderToCanvas(document.getElementById('prev512'), 256, 512);
+  document.getElementById('dl180').disabled = !sourceImage;
+  document.getElementById('dl192').disabled = !sourceImage;
+  document.getElementById('dl512').disabled = !sourceImage;
+}
+
+function downloadIcon(size, filename){
+  if(!sourceImage) return;
+  const c = document.createElement('canvas');
+  renderToCanvas(c, size, size);
+  c.toBlob(blob=>{
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+}
+document.getElementById('dl180').addEventListener('click', ()=>downloadIcon(180, 'icon-180.png'));
+document.getElementById('dl192').addEventListener('click', ()=>downloadIcon(192, 'icon-192.png'));
+document.getElementById('dl512').addEventListener('click', ()=>downloadIcon(512, 'icon-512.png'));
+
+render();
+</script>
+</body>
+</html>
