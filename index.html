@@ -14,6 +14,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{background:#F2F2F7;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;overscroll-behavior:none}
@@ -26,6 +28,27 @@
 <div id="root"></div>
 <script type="text/babel">
 const{useState,useEffect,useCallback,useRef}=React;
+
+/* ---------- Firebase ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyDRm2RQIm0lZbOwKmZIJfdYZng3HIAlyCc",
+  authDomain: "lilianfeld-plan.firebaseapp.com",
+  projectId: "lilianfeld-plan",
+  storageBucket: "lilianfeld-plan.firebasestorage.app",
+  messagingSenderId: "1098965869642",
+  appId: "1:1098965869642:web:c42ba903109c8a4b5a32b3"
+};
+if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
+
+function newSyncCode(){
+  const chars="abcdefghjkmnpqrstuvwxyz23456789";
+  const seg=()=>Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join("");
+  return `lf-${seg()}-${seg()}-${seg()}`;
+}
+
+/* ---------- Plan data ---------- */
 const WEEKS=[
   {label:"Week 1",subtitle:"Fix the Foundation",  accent:"#FF9500",icon:"🔧"},
   {label:"Week 2",subtitle:"Awareness & Feedback", accent:"#AF52DE",icon:"📣"},
@@ -96,6 +119,7 @@ function buildWeekShare(wi,checked,custom){
   }).join("\n")+`\n\n🕯 lilianfeld.com`;
 }
 
+/* ---------- App ---------- */
 function App(){
   const[week,setWeek]=useState(0);
   const[activeDay,setActiveDay]=useState(null);
@@ -104,39 +128,145 @@ function App(){
   const[custom,setCustom]=useState({});
   const[toast,setToast]=useState(null);
 
+  const[syncCode,setSyncCode]=useState(null);
+  const[syncStatus,setSyncStatus]=useState("local"); // local | connecting | synced | error
+  const[syncOpen,setSyncOpen]=useState(false);
+  const remoteRef=useRef({checked:{},notes:{},custom:{}});
+
+  /* Initial load from localStorage (cache) */
   useEffect(()=>{
     try{const s=localStorage.getItem("lf_v1");if(s)setChecked(JSON.parse(s))}catch{};
     try{const n=localStorage.getItem("lf_notes_v1");if(n)setNotes(JSON.parse(n))}catch{};
     try{const c=localStorage.getItem("lf_custom_v1");if(c)setCustom(JSON.parse(c))}catch{};
+    try{const sc=localStorage.getItem("lf_sync_code");if(sc)setSyncCode(sc)}catch{};
   },[]);
 
-  const toggle=k=>{setChecked(p=>{const n={...p,[k]:!p[k]};try{localStorage.setItem("lf_v1",JSON.stringify(n))}catch{};return n;});};
+  /* Persist to localStorage on change (cache) */
+  useEffect(()=>{try{localStorage.setItem("lf_v1",JSON.stringify(checked))}catch{}},[checked]);
+  useEffect(()=>{try{localStorage.setItem("lf_notes_v1",JSON.stringify(notes))}catch{}},[notes]);
+  useEffect(()=>{try{localStorage.setItem("lf_custom_v1",JSON.stringify(custom))}catch{}},[custom]);
 
-  const saveNote=(day,text)=>{setNotes(p=>{const n={...p,[day]:text};try{localStorage.setItem("lf_notes_v1",JSON.stringify(n))}catch{};return n;});};
+  /* Firestore subscription */
+  useEffect(()=>{
+    if(!syncCode){setSyncStatus("local");return;}
+    setSyncStatus("connecting");
+    const unsub = db.collection("sync").doc(syncCode).onSnapshot(
+      snap=>{
+        setSyncStatus("synced");
+        if(snap.exists){
+          const d=snap.data();
+          const newCh=d.checked||{},newN=d.notes||{},newC=d.custom||{};
+          remoteRef.current={checked:newCh,notes:newN,custom:newC};
+          setChecked(newCh);
+          setNotes(newN);
+          setCustom(newC);
+        } else {
+          // Doc doesn't exist yet — push current local state to create it
+          db.collection("sync").doc(syncCode).set({
+            checked,notes,custom,
+            updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+            schemaVersion:1
+          }).then(()=>{remoteRef.current={checked,notes,custom};}).catch(()=>{});
+        }
+      },
+      err=>{console.error("Firestore error:",err);setSyncStatus("error");}
+    );
+    return unsub;
+  },[syncCode]); // eslint-disable-line
 
+  /* Write to Firestore on local change (debounced) */
+  useEffect(()=>{
+    if(!syncCode || syncStatus!=="synced") return;
+    const same =
+      JSON.stringify(checked)===JSON.stringify(remoteRef.current.checked) &&
+      JSON.stringify(notes)===JSON.stringify(remoteRef.current.notes) &&
+      JSON.stringify(custom)===JSON.stringify(remoteRef.current.custom);
+    if(same) return;
+    const t=setTimeout(()=>{
+      db.collection("sync").doc(syncCode).set({
+        checked,notes,custom,
+        updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+        schemaVersion:1
+      }).then(()=>{
+        remoteRef.current={checked,notes,custom};
+      }).catch(err=>console.error("Sync write failed:",err));
+    },600);
+    return ()=>clearTimeout(t);
+  },[checked,notes,custom,syncCode,syncStatus]);
+
+  /* Sync activation */
+  const activateSync = async (code) => {
+    const c=(code||"").trim();
+    if(c.length<6){alert("Code must be at least 6 characters.");return;}
+    try{
+      setSyncStatus("connecting");
+      const snap = await db.collection("sync").doc(c).get();
+      if(snap.exists){
+        const d=snap.data();
+        const hasData=Object.keys(d.checked||{}).length>0 || Object.keys(d.notes||{}).length>0 || Object.keys(d.custom||{}).length>0;
+        const localHasData = Object.keys(checked).length>0 || Object.keys(notes).length>0 || Object.keys(custom).length>0;
+        if(hasData && localHasData){
+          if(!confirm("This code has existing data. Replace your local progress with the synced data? (Your local data will be lost.)")){
+            setSyncStatus(syncCode?"synced":"local");
+            return;
+          }
+        }
+        if(hasData){
+          setChecked(d.checked||{});
+          setNotes(d.notes||{});
+          setCustom(d.custom||{});
+          remoteRef.current={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{}};
+        } else {
+          await db.collection("sync").doc(c).set({
+            checked,notes,custom,
+            updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+            schemaVersion:1
+          });
+          remoteRef.current={checked,notes,custom};
+        }
+      } else {
+        await db.collection("sync").doc(c).set({
+          checked,notes,custom,
+          updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+          schemaVersion:1
+        });
+        remoteRef.current={checked,notes,custom};
+      }
+      try{localStorage.setItem("lf_sync_code",c)}catch{};
+      setSyncCode(c);
+      setSyncStatus("synced");
+      setSyncOpen(false);
+      setToast("Sync enabled");
+      setTimeout(()=>setToast(null),2200);
+    } catch(err){
+      console.error(err);
+      alert("Couldn't connect. Check your internet and try again.");
+      setSyncStatus(syncCode?"synced":"local");
+    }
+  };
+  const disconnectSync = ()=>{
+    if(!confirm("Stop syncing? Your local data stays on this device. Other devices will keep their copy.")) return;
+    try{localStorage.removeItem("lf_sync_code")}catch{};
+    setSyncCode(null);
+    setSyncStatus("local");
+    setSyncOpen(false);
+    setToast("Sync disabled");
+    setTimeout(()=>setToast(null),2200);
+  };
+
+  const toggle=k=>setChecked(p=>({...p,[k]:!p[k]}));
+  const saveNote=(day,text)=>setNotes(p=>({...p,[day]:text}));
   const addCustomTask=(day,text)=>{
-    const trimmed=(text||"").trim();
-    if(!trimmed)return;
+    const trimmed=(text||"").trim();if(!trimmed)return;
     setCustom(p=>{
       const list=p[day]||[];
       const id=Date.now().toString(36)+Math.random().toString(36).slice(2,5);
-      const n={...p,[day]:[...list,{id,text:trimmed}]};
-      try{localStorage.setItem("lf_custom_v1",JSON.stringify(n))}catch{};
-      return n;
+      return{...p,[day]:[...list,{id,text:trimmed}]};
     });
   };
-
   const removeCustomTask=(day,id)=>{
-    setCustom(p=>{
-      const n={...p,[day]:(p[day]||[]).filter(t=>t.id!==id)};
-      try{localStorage.setItem("lf_custom_v1",JSON.stringify(n))}catch{};
-      return n;
-    });
-    setChecked(p=>{
-      const n={...p};delete n[`${day}-c${id}`];
-      try{localStorage.setItem("lf_v1",JSON.stringify(n))}catch{};
-      return n;
-    });
+    setCustom(p=>({...p,[day]:(p[day]||[]).filter(t=>t.id!==id)}));
+    setChecked(p=>{const n={...p};delete n[`${day}-c${id}`];return n;});
   };
 
   const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2200);};
@@ -169,6 +299,7 @@ function App(){
         </div>
       </div>
       <div style={s.body}>
+        <SyncBar status={syncStatus} code={syncCode} accent={W.accent} onClick={()=>setSyncOpen(true)}/>
         {activeDay
           ? <DayDetail
               d={activeDay}
@@ -251,6 +382,88 @@ function App(){
           </>
         }
       </div>
+      {syncOpen&&<SyncModal
+        currentCode={syncCode}
+        status={syncStatus}
+        accent={W.accent}
+        onActivate={activateSync}
+        onDisconnect={disconnectSync}
+        onClose={()=>setSyncOpen(false)}
+        showToast={showToast}/>}
+    </div>
+  );
+}
+
+function SyncBar({status,code,accent,onClick}){
+  let icon="📱",label="Local only — Enable sync",sub="";
+  if(status==="connecting"){icon="☁️";label="Connecting…";}
+  else if(status==="synced"){icon="☁️";label="Synced across devices";sub=code;}
+  else if(status==="error"){icon="⚠️";label="Sync error — tap to retry";}
+  return(
+    <button onClick={onClick} style={{width:"100%",background:"#fff",border:"none",borderRadius:12,padding:"10px 14px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flex:1}}>
+        <span style={{fontSize:16,flexShrink:0}}>{icon}</span>
+        <div style={{textAlign:"left",minWidth:0,flex:1}}>
+          <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E"}}>{label}</div>
+          {sub&&<div style={{fontSize:11,color:"#8E8E93",fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</div>}
+        </div>
+      </div>
+      <span style={{fontSize:12,color:accent,fontWeight:600,flexShrink:0,marginLeft:8}}>{status==="synced"?"Manage":"Set up"} →</span>
+    </button>
+  );
+}
+
+function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,showToast}){
+  const[input,setInput]=useState("");
+  const isSynced = status==="synced" && currentCode;
+  const copyCode=()=>{
+    if(!currentCode)return;
+    navigator.clipboard?.writeText(currentCode).then(()=>showToast("Code copied")).catch(()=>prompt("Copy this:",currentCode));
+  };
+  const handleGenerate=()=>{setInput(newSyncCode());};
+  const handleConnect=()=>onActivate(input);
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,borderTopLeftRadius:24,borderTopRightRadius:24,padding:"20px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 16px"}}/>
+        <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>Sync across devices</div>
+        <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>Use the same sync code on multiple devices to keep your checkboxes, notes, and custom tasks in sync.</div>
+
+        {isSynced&&(
+          <div style={{background:`${accent}10`,border:`1px solid ${accent}30`,borderRadius:14,padding:"14px 16px",marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:accent,letterSpacing:0.5,textTransform:"uppercase",marginBottom:6}}>☁️ Currently synced</div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <code style={{flex:1,fontSize:14,fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",color:"#1C1C1E",background:"#fff",padding:"8px 10px",borderRadius:8,border:"1px solid #E5E5EA",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{currentCode}</code>
+              <button onClick={copyCode} style={{background:accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,fontWeight:600,cursor:"pointer",flexShrink:0}}>Copy</button>
+            </div>
+            <div style={{fontSize:12,color:"#8E8E93",marginTop:10,lineHeight:1.5}}>To add another device: open the app there, tap the sync bar, and enter this code below.</div>
+          </div>
+        )}
+
+        <div style={{fontSize:12,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:8}}>{isSynced?"Switch to a different code":"Set up sync"}</div>
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          <input
+            type="text"
+            value={input}
+            onChange={e=>setInput(e.target.value)}
+            placeholder="Enter or generate a code"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{flex:1,border:"1px solid #E5E5EA",borderRadius:12,padding:"11px 14px",fontSize:15,fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",color:"#1C1C1E",background:"#FAFAFA",minWidth:0}}/>
+          <button onClick={handleGenerate} style={{background:"#F2F2F7",color:"#1C1C1E",border:"none",borderRadius:12,padding:"0 14px",fontSize:13,fontWeight:600,cursor:"pointer",flexShrink:0}}>Generate</button>
+        </div>
+        <button onClick={handleConnect} disabled={input.trim().length<6} style={{width:"100%",background:input.trim().length>=6?accent:"#E5E5EA",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:600,cursor:input.trim().length>=6?"pointer":"default",marginBottom:isSynced?10:16}}>{isSynced?"Switch code":"Connect"}</button>
+
+        <div style={{fontSize:12,color:"#8E8E93",lineHeight:1.5,marginBottom:isSynced?16:0}}>
+          <strong style={{color:"#1C1C1E"}}>How it works:</strong> On your first device, tap Generate and Connect — that creates your code. On your second device, type the same code and Connect. Both devices will then stay in sync.
+        </div>
+
+        {isSynced&&(
+          <button onClick={onDisconnect} style={{width:"100%",background:"#fff",color:"#FF3B30",border:"1px solid #FFD7D5",borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer",marginBottom:10}}>Stop syncing on this device</button>
+        )}
+        <button onClick={onClose} style={{width:"100%",background:"none",color:"#8E8E93",border:"none",padding:"10px",fontSize:14,fontWeight:600,cursor:"pointer"}}>Close</button>
+      </div>
     </div>
   );
 }
@@ -266,10 +479,8 @@ function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,on
   const allDone=total>0&&done===total;
 
   const submit=()=>{
-    const t=newTask.trim();
-    if(!t)return;
-    onAddCustom(t);
-    setNewTask("");
+    const t=newTask.trim();if(!t)return;
+    onAddCustom(t);setNewTask("");
   };
 
   return(
@@ -303,8 +514,7 @@ function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,on
 
         <div style={{padding:"8px 0"}}>
           {d.tasks.map((t,i)=>{
-            const key=`${d.day}-${i}`;
-            const isDone=checked[key];
+            const key=`${d.day}-${i}`;const isDone=checked[key];
             return(
               <div key={i} onClick={()=>onToggle(key)} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",cursor:"pointer",background:isDone?`${cc}08`:"transparent",transition:"background 0.15s",borderBottom:"1px solid #F2F2F7"}}>
                 <div style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s"}}>
@@ -319,8 +529,7 @@ function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,on
             <div style={{padding:"12px 20px 6px",fontSize:11,fontWeight:700,color:"#8E8E93",textTransform:"uppercase",letterSpacing:0.5,background:"#FAFAFA"}}>Your tasks</div>
           )}
           {custom.map((t,i)=>{
-            const key=`${d.day}-c${t.id}`;
-            const isDone=checked[key];
+            const key=`${d.day}-c${t.id}`;const isDone=checked[key];
             return(
               <div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",background:isDone?`${cc}08`:"#FAFAFA",borderBottom:"1px solid #F2F2F7"}}>
                 <div onClick={()=>onToggle(key)} style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",transition:"all 0.2s"}}>
