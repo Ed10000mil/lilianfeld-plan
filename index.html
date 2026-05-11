@@ -48,6 +48,11 @@ function newSyncCode(){
   return `lf-${seg()}-${seg()}-${seg()}`;
 }
 
+/* ---------- Theme ---------- */
+const ASSIGN_E = {bg:"#DFF1FE", text:"#0277BD", border:"#90CAF9", solid:"#5AC8FA", name:"Edward", initial:"E"};
+const ASSIGN_C = {bg:"#FEE2E2", text:"#C62828", border:"#EF9A9A", solid:"#FF6B6B", name:"Clarissa", initial:"C"};
+const personTheme = (p) => p==="e" ? ASSIGN_E : ASSIGN_C;
+
 /* ---------- Plan data ---------- */
 const WEEKS=[
   {label:"Week 1",subtitle:"Fix the Foundation",  accent:"#FF9500",icon:"🔧"},
@@ -93,30 +98,22 @@ const DAYS=[
 ];
 const DAILY=["Post or prepare one piece of content","Contact 3–5 new people","Check website & ad performance","Improve one small part of the funnel","Collect one piece of feedback"];
 
-function dayCounts(d, checked, custom){
-  const cList = custom[d.day] || [];
-  const builtDone = d.tasks.filter((_,i)=>checked[`${d.day}-${i}`]).length;
-  const customDone = cList.filter(t=>checked[`${d.day}-c${t.id}`]).length;
-  return {done: builtDone + customDone, total: d.tasks.length + cList.length};
+/* effectiveTasks: returns array of {key,text,builtin,index,customId} for a day, applying overrides+deletes, plus custom tasks */
+function effectiveTasks(d, overrides, deleted, custom){
+  const built = d.tasks.map((t,i)=>{
+    const key=`${d.day}-${i}`;
+    if(deleted[key]) return null;
+    return {key, text: overrides[key]||t, builtin:true, index:i};
+  }).filter(Boolean);
+  const cust = (custom[d.day]||[]).map(t=>({
+    key:`${d.day}-c${t.id}`, text:t.text, builtin:false, customId:t.id
+  }));
+  return [...built, ...cust];
 }
-
-function shareText(text){
-  if(navigator.share){navigator.share({title:"Lilianfeld 30-Day Plan",text}).catch(()=>{})}
-  else{navigator.clipboard?.writeText(text).then(()=>alert("Copied to clipboard!")).catch(()=>prompt("Copy this:",text))}
-}
-function buildDayShare(d,checked,custom,notes){
-  const built=d.tasks.map((t,i)=>`${checked[`${d.day}-${i}`]?"✅":"⬜"} ${t}`);
-  const cust=(custom[d.day]||[]).map(t=>`${checked[`${d.day}-c${t.id}`]?"✅":"⬜"} ${t.text} (custom)`);
-  const all=[...built,...cust].join("\n");
-  const note=(notes[d.day]||"").trim();
-  return`📋 Lilianfeld — Day ${d.day}: ${d.title}\n\n${all}${note?`\n\n📝 Notes:\n${note}`:""}\n\n🕯 lilianfeld.com`;
-}
-function buildWeekShare(wi,checked,custom){
-  const wDays=DAYS.filter(d=>d.week===wi);
-  return`🕯 Lilianfeld — ${WEEKS[wi].label}: ${WEEKS[wi].subtitle}\n\n`+wDays.map(d=>{
-    const c=dayCounts(d,checked,custom);
-    return`Day ${d.day}: ${d.title} ${c.done}/${c.total} ${"█".repeat(c.done)}${"░".repeat(Math.max(0,c.total-c.done))}`;
-  }).join("\n")+`\n\n🕯 lilianfeld.com`;
+function dayCounts(d, checked, overrides, deleted, custom){
+  const tasks = effectiveTasks(d, overrides, deleted, custom);
+  const done = tasks.filter(t=>checked[t.key]).length;
+  return {done, total:tasks.length, tasks};
 }
 
 /* ---------- App ---------- */
@@ -126,25 +123,41 @@ function App(){
   const[checked,setChecked]=useState({});
   const[notes,setNotes]=useState({});
   const[custom,setCustom]=useState({});
+  const[overrides,setOverrides]=useState({});
+  const[deleted,setDeleted]=useState({});
+  const[assignedE,setAssignedE]=useState({});
+  const[assignedC,setAssignedC]=useState({});
   const[toast,setToast]=useState(null);
 
-  const[syncCode,setSyncCode]=useState(null);
-  const[syncStatus,setSyncStatus]=useState("local"); // local | connecting | synced | error
-  const[syncOpen,setSyncOpen]=useState(false);
-  const remoteRef=useRef({checked:{},notes:{},custom:{}});
+  const[menuTask,setMenuTask]=useState(null); // {dayObj, taskObj} for long-press menu
+  const[editingKey,setEditingKey]=useState(null);
+  const[personView,setPersonView]=useState(null); // "e" | "c" | null
 
-  /* Initial load from localStorage (cache) */
+  const[syncCode,setSyncCode]=useState(null);
+  const[syncStatus,setSyncStatus]=useState("local");
+  const[syncOpen,setSyncOpen]=useState(false);
+  const remoteRef=useRef({checked:{},notes:{},custom:{},overrides:{},deleted:{},assignedE:{},assignedC:{}});
+
+  /* Initial load */
   useEffect(()=>{
     try{const s=localStorage.getItem("lf_v1");if(s)setChecked(JSON.parse(s))}catch{};
     try{const n=localStorage.getItem("lf_notes_v1");if(n)setNotes(JSON.parse(n))}catch{};
     try{const c=localStorage.getItem("lf_custom_v1");if(c)setCustom(JSON.parse(c))}catch{};
+    try{const o=localStorage.getItem("lf_overrides_v1");if(o)setOverrides(JSON.parse(o))}catch{};
+    try{const d=localStorage.getItem("lf_deleted_v1");if(d)setDeleted(JSON.parse(d))}catch{};
+    try{const ae=localStorage.getItem("lf_assigne_v1");if(ae)setAssignedE(JSON.parse(ae))}catch{};
+    try{const ac=localStorage.getItem("lf_assignc_v1");if(ac)setAssignedC(JSON.parse(ac))}catch{};
     try{const sc=localStorage.getItem("lf_sync_code");if(sc)setSyncCode(sc)}catch{};
   },[]);
 
-  /* Persist to localStorage on change (cache) */
+  /* Persist to localStorage */
   useEffect(()=>{try{localStorage.setItem("lf_v1",JSON.stringify(checked))}catch{}},[checked]);
   useEffect(()=>{try{localStorage.setItem("lf_notes_v1",JSON.stringify(notes))}catch{}},[notes]);
   useEffect(()=>{try{localStorage.setItem("lf_custom_v1",JSON.stringify(custom))}catch{}},[custom]);
+  useEffect(()=>{try{localStorage.setItem("lf_overrides_v1",JSON.stringify(overrides))}catch{}},[overrides]);
+  useEffect(()=>{try{localStorage.setItem("lf_deleted_v1",JSON.stringify(deleted))}catch{}},[deleted]);
+  useEffect(()=>{try{localStorage.setItem("lf_assigne_v1",JSON.stringify(assignedE))}catch{}},[assignedE]);
+  useEffect(()=>{try{localStorage.setItem("lf_assignc_v1",JSON.stringify(assignedC))}catch{}},[assignedC]);
 
   /* Firestore subscription */
   useEffect(()=>{
@@ -155,18 +168,25 @@ function App(){
         setSyncStatus("synced");
         if(snap.exists){
           const d=snap.data();
-          const newCh=d.checked||{},newN=d.notes||{},newC=d.custom||{};
-          remoteRef.current={checked:newCh,notes:newN,custom:newC};
-          setChecked(newCh);
-          setNotes(newN);
-          setCustom(newC);
+          const r = {
+            checked: d.checked||{},
+            notes: d.notes||{},
+            custom: d.custom||{},
+            overrides: d.overrides||{},
+            deleted: d.deleted||{},
+            assignedE: d.assignedE||{},
+            assignedC: d.assignedC||{},
+          };
+          remoteRef.current=r;
+          setChecked(r.checked);setNotes(r.notes);setCustom(r.custom);
+          setOverrides(r.overrides);setDeleted(r.deleted);
+          setAssignedE(r.assignedE);setAssignedC(r.assignedC);
         } else {
-          // Doc doesn't exist yet — push current local state to create it
           db.collection("sync").doc(syncCode).set({
-            checked,notes,custom,
+            checked,notes,custom,overrides,deleted,assignedE,assignedC,
             updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-            schemaVersion:1
-          }).then(()=>{remoteRef.current={checked,notes,custom};}).catch(()=>{});
+            schemaVersion:2
+          }).then(()=>{remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};}).catch(()=>{});
         }
       },
       err=>{console.error("Firestore error:",err);setSyncStatus("error");}
@@ -174,86 +194,32 @@ function App(){
     return unsub;
   },[syncCode]); // eslint-disable-line
 
-  /* Write to Firestore on local change (debounced) */
+  /* Write to Firestore on change (debounced) */
   useEffect(()=>{
     if(!syncCode || syncStatus!=="synced") return;
+    const r=remoteRef.current;
     const same =
-      JSON.stringify(checked)===JSON.stringify(remoteRef.current.checked) &&
-      JSON.stringify(notes)===JSON.stringify(remoteRef.current.notes) &&
-      JSON.stringify(custom)===JSON.stringify(remoteRef.current.custom);
+      JSON.stringify(checked)===JSON.stringify(r.checked) &&
+      JSON.stringify(notes)===JSON.stringify(r.notes) &&
+      JSON.stringify(custom)===JSON.stringify(r.custom) &&
+      JSON.stringify(overrides)===JSON.stringify(r.overrides) &&
+      JSON.stringify(deleted)===JSON.stringify(r.deleted) &&
+      JSON.stringify(assignedE)===JSON.stringify(r.assignedE) &&
+      JSON.stringify(assignedC)===JSON.stringify(r.assignedC);
     if(same) return;
     const t=setTimeout(()=>{
       db.collection("sync").doc(syncCode).set({
-        checked,notes,custom,
+        checked,notes,custom,overrides,deleted,assignedE,assignedC,
         updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-        schemaVersion:1
+        schemaVersion:2
       }).then(()=>{
-        remoteRef.current={checked,notes,custom};
+        remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};
       }).catch(err=>console.error("Sync write failed:",err));
     },600);
     return ()=>clearTimeout(t);
-  },[checked,notes,custom,syncCode,syncStatus]);
+  },[checked,notes,custom,overrides,deleted,assignedE,assignedC,syncCode,syncStatus]);
 
-  /* Sync activation */
-  const activateSync = async (code) => {
-    const c=(code||"").trim();
-    if(c.length<6){alert("Code must be at least 6 characters.");return;}
-    try{
-      setSyncStatus("connecting");
-      const snap = await db.collection("sync").doc(c).get();
-      if(snap.exists){
-        const d=snap.data();
-        const hasData=Object.keys(d.checked||{}).length>0 || Object.keys(d.notes||{}).length>0 || Object.keys(d.custom||{}).length>0;
-        const localHasData = Object.keys(checked).length>0 || Object.keys(notes).length>0 || Object.keys(custom).length>0;
-        if(hasData && localHasData){
-          if(!confirm("This code has existing data. Replace your local progress with the synced data? (Your local data will be lost.)")){
-            setSyncStatus(syncCode?"synced":"local");
-            return;
-          }
-        }
-        if(hasData){
-          setChecked(d.checked||{});
-          setNotes(d.notes||{});
-          setCustom(d.custom||{});
-          remoteRef.current={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{}};
-        } else {
-          await db.collection("sync").doc(c).set({
-            checked,notes,custom,
-            updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-            schemaVersion:1
-          });
-          remoteRef.current={checked,notes,custom};
-        }
-      } else {
-        await db.collection("sync").doc(c).set({
-          checked,notes,custom,
-          updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-          schemaVersion:1
-        });
-        remoteRef.current={checked,notes,custom};
-      }
-      try{localStorage.setItem("lf_sync_code",c)}catch{};
-      setSyncCode(c);
-      setSyncStatus("synced");
-      setSyncOpen(false);
-      setToast("Sync enabled");
-      setTimeout(()=>setToast(null),2200);
-    } catch(err){
-      console.error(err);
-      alert("Couldn't connect. Check your internet and try again.");
-      setSyncStatus(syncCode?"synced":"local");
-    }
-  };
-  const disconnectSync = ()=>{
-    if(!confirm("Stop syncing? Your local data stays on this device. Other devices will keep their copy.")) return;
-    try{localStorage.removeItem("lf_sync_code")}catch{};
-    setSyncCode(null);
-    setSyncStatus("local");
-    setSyncOpen(false);
-    setToast("Sync disabled");
-    setTimeout(()=>setToast(null),2200);
-  };
-
+  /* Actions */
   const toggle=k=>setChecked(p=>({...p,[k]:!p[k]}));
   const saveNote=(day,text)=>setNotes(p=>({...p,[day]:text}));
   const addCustomTask=(day,text)=>{
@@ -264,25 +230,113 @@ function App(){
       return{...p,[day]:[...list,{id,text:trimmed}]};
     });
   };
-  const removeCustomTask=(day,id)=>{
-    setCustom(p=>({...p,[day]:(p[day]||[]).filter(t=>t.id!==id)}));
-    setChecked(p=>{const n={...p};delete n[`${day}-c${id}`];return n;});
+  const editTask = (task, newText) => {
+    const t=(newText||"").trim();
+    if(!t) return;
+    if(task.builtin){
+      setOverrides(p=>({...p,[task.key]:t}));
+    } else {
+      setCustom(p=>{
+        const list=(p[task.dayNum||menuTask?.dayObj.day]||[]).map(x=>x.id===task.customId?{...x,text:t}:x);
+        const dayNum=task.dayNum||menuTask?.dayObj.day;
+        return {...p,[dayNum]:list};
+      });
+    }
+  };
+  const deleteTask = (task, dayNum) => {
+    if(task.builtin){
+      setDeleted(p=>({...p,[task.key]:true}));
+    } else {
+      setCustom(p=>({...p,[dayNum]:(p[dayNum]||[]).filter(t=>t.id!==task.customId)}));
+      setChecked(p=>{const n={...p};delete n[task.key];return n;});
+    }
+    // Clean assignments
+    setAssignedE(p=>{const n={...p};delete n[task.key];return n;});
+    setAssignedC(p=>{const n={...p};delete n[task.key];return n;});
+  };
+  const restoreDeletedForDay = (dayNum) => {
+    setDeleted(p=>{
+      const n={...p};
+      Object.keys(n).forEach(k=>{if(k.startsWith(`${dayNum}-`)) delete n[k];});
+      return n;
+    });
+  };
+  const toggleAssignE=k=>setAssignedE(p=>{const n={...p};if(n[k])delete n[k];else n[k]=true;return n;});
+  const toggleAssignC=k=>setAssignedC(p=>{const n={...p};if(n[k])delete n[k];else n[k]=true;return n;});
+
+  /* Sync */
+  const activateSync = async (code) => {
+    const c=(code||"").trim();
+    if(c.length<6){alert("Code must be at least 6 characters.");return;}
+    try{
+      setSyncStatus("connecting");
+      const snap = await db.collection("sync").doc(c).get();
+      const hasLocal = Object.keys(checked).length+Object.keys(notes).length+Object.keys(custom).length+Object.keys(overrides).length+Object.keys(deleted).length>0;
+      if(snap.exists){
+        const d=snap.data();
+        const remoteHas = Object.keys(d.checked||{}).length+Object.keys(d.notes||{}).length+Object.keys(d.custom||{}).length+Object.keys(d.overrides||{}).length+Object.keys(d.deleted||{}).length>0;
+        if(remoteHas && hasLocal){
+          if(!confirm("This code has existing data. Replace your local progress with the synced data?")){
+            setSyncStatus(syncCode?"synced":"local");return;
+          }
+        }
+        if(remoteHas){
+          setChecked(d.checked||{});setNotes(d.notes||{});setCustom(d.custom||{});
+          setOverrides(d.overrides||{});setDeleted(d.deleted||{});
+          setAssignedE(d.assignedE||{});setAssignedC(d.assignedC||{});
+          remoteRef.current={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{},overrides:d.overrides||{},deleted:d.deleted||{},assignedE:d.assignedE||{},assignedC:d.assignedC||{}};
+        } else {
+          await db.collection("sync").doc(c).set({checked,notes,custom,overrides,deleted,assignedE,assignedC,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),schemaVersion:2});
+          remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};
+        }
+      } else {
+        await db.collection("sync").doc(c).set({checked,notes,custom,overrides,deleted,assignedE,assignedC,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),schemaVersion:2});
+        remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};
+      }
+      try{localStorage.setItem("lf_sync_code",c)}catch{};
+      setSyncCode(c);setSyncStatus("synced");setSyncOpen(false);showToast("Sync enabled");
+    } catch(err){console.error(err);alert("Couldn't connect.");setSyncStatus(syncCode?"synced":"local");}
+  };
+  const disconnectSync = ()=>{
+    if(!confirm("Stop syncing? Your local data stays on this device.")) return;
+    try{localStorage.removeItem("lf_sync_code")}catch{};
+    setSyncCode(null);setSyncStatus("local");setSyncOpen(false);showToast("Sync disabled");
   };
 
   const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2200);};
 
-  const totals=DAYS.reduce((a,d)=>{const c=dayCounts(d,checked,custom);return{done:a.done+c.done,total:a.total+c.total};},{done:0,total:0});
+  /* Counts */
+  const totals=DAYS.reduce((a,d)=>{const c=dayCounts(d,checked,overrides,deleted,custom);return{done:a.done+c.done,total:a.total+c.total};},{done:0,total:0});
   const pct=totals.total?Math.round(totals.done/totals.total*100):0;
   const W=WEEKS[week];
   const weekDays=DAYS.filter(d=>d.week===week);
+
+  // Counts for week buttons (E and C)
+  const allTaskKeys = (filterFn) => {
+    const keys=[];
+    DAYS.forEach(d=>{
+      if(filterFn && !filterFn(d)) return;
+      const tasks=effectiveTasks(d,overrides,deleted,custom);
+      tasks.forEach(t=>keys.push(t.key));
+    });
+    return keys;
+  };
+  const weekECount = weekDays.reduce((a,d)=>{
+    return a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedE[t.key]).length;
+  },0);
+  const weekCCount = weekDays.reduce((a,d)=>{
+    return a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedC[t.key]).length;
+  },0);
+
   const s={
     wrap:{fontFamily:"-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif",background:"#F2F2F7",minHeight:"100vh",maxWidth:430,margin:"0 auto",paddingBottom:80},
     hdr:{background:"rgba(242,242,247,0.92)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",padding:"env(safe-area-inset-top,44px) 20px 14px",position:"sticky",top:0,zIndex:10,borderBottom:"1px solid rgba(0,0,0,0.08)"},
     body:{padding:"16px 16px 0"},
   };
+
   return(
     <div style={s.wrap}>
-      {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1C1C1E",color:"#fff",fontSize:13,fontWeight:500,padding:"9px 18px",borderRadius:99,zIndex:999,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap"}}>{toast}</div>}
+      {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1C1C1E",color:"#fff",fontSize:13,fontWeight:500,padding:"9px 18px",borderRadius:99,zIndex:1100,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap"}}>{toast}</div>}
       <div style={s.hdr}>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
           <div>
@@ -302,20 +356,24 @@ function App(){
         {activeDay
           ? <DayDetail
               d={activeDay}
-              checked={checked}
-              custom={custom[activeDay.day]||[]}
+              checked={checked} custom={custom[activeDay.day]||[]}
+              overrides={overrides} deleted={deleted}
+              assignedE={assignedE} assignedC={assignedC}
               note={notes[activeDay.day]||""}
+              editingKey={editingKey}
               onToggle={toggle}
+              onLongPress={(taskObj)=>setMenuTask({dayObj:activeDay, taskObj})}
               onAddCustom={text=>addCustomTask(activeDay.day,text)}
-              onRemoveCustom={id=>removeCustomTask(activeDay.day,id)}
               onNoteChange={text=>saveNote(activeDay.day,text)}
-              onBack={()=>setActiveDay(null)}
-              onShare={()=>{shareText(buildDayShare(activeDay,checked,custom,notes));showToast("Shared!");}}/>
+              onEditSave={(taskObj,text)=>{editTask({...taskObj,dayNum:activeDay.day},text);setEditingKey(null);}}
+              onEditCancel={()=>setEditingKey(null)}
+              onRestoreDeleted={()=>restoreDeletedForDay(activeDay.day)}
+              onBack={()=>setActiveDay(null)}/>
           : <>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
               {WEEKS.map((wk,i)=>{
                 const wDs=DAYS.filter(d=>d.week===i);
-                const tot=wDs.reduce((a,d)=>{const c=dayCounts(d,checked,custom);return{d:a.d+c.done,t:a.t+c.total};},{d:0,t:0});
+                const tot=wDs.reduce((a,d)=>{const c=dayCounts(d,checked,overrides,deleted,custom);return{d:a.d+c.done,t:a.t+c.total};},{d:0,t:0});
                 const act=week===i;
                 return(
                   <button key={i} onClick={()=>setWeek(i)} style={{border:"none",borderRadius:16,padding:"14px 14px",cursor:"pointer",textAlign:"left",background:act?wk.accent:"#fff",boxShadow:act?`0 4px 16px ${wk.accent}50`:"0 1px 4px rgba(0,0,0,0.08)",transform:act?"scale(1.02)":"scale(1)",transition:"all 0.2s"}}>
@@ -330,18 +388,17 @@ function App(){
                 );
               })}
             </div>
-            <button onClick={()=>{shareText(buildWeekShare(week,checked,custom));showToast("Week summary shared!");}}
-              style={{width:"100%",background:"#fff",border:"none",borderRadius:14,padding:"13px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.08)"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:18}}>📤</span>
-                <span style={{fontSize:14,fontWeight:600,color:"#1C1C1E"}}>Share {W.label} Summary</span>
-              </div>
-              <span style={{fontSize:12,color:W.accent,fontWeight:600}}>Share →</span>
-            </button>
+
+            {/* E / C buttons */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+              <PersonButton person="e" count={weekECount} onClick={()=>setPersonView("e")}/>
+              <PersonButton person="c" count={weekCCount} onClick={()=>setPersonView("c")}/>
+            </div>
+
             <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.08)",marginBottom:16}}>
               {weekDays.map((d,idx)=>{
                 const cc=CAT_COLOR[d.cat]||"#8E8E93";
-                const c=dayCounts(d,checked,custom);
+                const c=dayCounts(d,checked,overrides,deleted,custom);
                 const dn=c.total>0&&c.done===c.total;
                 const hasNote=(notes[d.day]||"").trim().length>0;
                 return(
@@ -382,18 +439,166 @@ function App(){
           </>
         }
       </div>
+
+      {menuTask&&<TaskActionSheet
+        task={menuTask.taskObj}
+        dayObj={menuTask.dayObj}
+        assignedE={assignedE[menuTask.taskObj.key]}
+        assignedC={assignedC[menuTask.taskObj.key]}
+        onEdit={()=>{setEditingKey(menuTask.taskObj.key);setMenuTask(null);}}
+        onAssignE={()=>{toggleAssignE(menuTask.taskObj.key);setMenuTask(null);}}
+        onAssignC={()=>{toggleAssignC(menuTask.taskObj.key);setMenuTask(null);}}
+        onDelete={()=>{
+          if(confirm(`Delete "${menuTask.taskObj.text}"?`)){
+            deleteTask(menuTask.taskObj, menuTask.dayObj.day);
+            setMenuTask(null);
+          }
+        }}
+        onClose={()=>setMenuTask(null)}/>}
+
+      {personView&&<PersonTasksSheet
+        person={personView}
+        currentWeek={week}
+        checked={checked}
+        custom={custom}
+        overrides={overrides}
+        deleted={deleted}
+        assignedE={assignedE}
+        assignedC={assignedC}
+        onToggle={toggle}
+        onOpenDay={(d)=>{setPersonView(null);setActiveDay(d);}}
+        onClose={()=>setPersonView(null)}/>}
+
       {syncOpen&&<SyncModal
-        currentCode={syncCode}
-        status={syncStatus}
-        accent={W.accent}
-        onActivate={activateSync}
-        onDisconnect={disconnectSync}
-        onClose={()=>setSyncOpen(false)}
-        showToast={showToast}/>}
+        currentCode={syncCode} status={syncStatus} accent={W.accent}
+        onActivate={activateSync} onDisconnect={disconnectSync}
+        onClose={()=>setSyncOpen(false)} showToast={showToast}/>}
     </div>
   );
 }
 
+/* ---------- Person summary buttons ---------- */
+function PersonButton({person, count, onClick}){
+  const t = personTheme(person);
+  return (
+    <button onClick={onClick} style={{border:`1px solid ${t.border}`,borderRadius:16,padding:"12px 14px",cursor:"pointer",textAlign:"left",background:t.bg,boxShadow:"0 1px 4px rgba(0,0,0,0.05)",display:"flex",alignItems:"center",gap:12}}>
+      <div style={{width:36,height:36,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,fontWeight:700,flexShrink:0}}>{t.initial}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:11,fontWeight:700,color:t.text,letterSpacing:0.4,textTransform:"uppercase"}}>{t.name}</div>
+        <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E",marginTop:1}}>{count} {count===1?"task":"tasks"} this week</div>
+      </div>
+      <span style={{color:t.text,fontSize:18,fontWeight:700,flexShrink:0}}>›</span>
+    </button>
+  );
+}
+
+/* ---------- Person tasks sheet ---------- */
+function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,assignedE,assignedC,onToggle,onOpenDay,onClose}){
+  const t = personTheme(person);
+  const [scope, setScope] = useState("week"); // "week" | "all"
+  const days = DAYS.filter(d => scope==="all" ? true : d.week===currentWeek);
+  const assignedMap = person==="e" ? assignedE : assignedC;
+  // Group: for each day, get tasks assigned to person
+  const grouped = days.map(d=>{
+    const tasks = effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedMap[t.key]);
+    return {day:d, tasks};
+  }).filter(g=>g.tasks.length>0);
+  const totalCount = grouped.reduce((a,g)=>a+g.tasks.length,0);
+  const doneCount = grouped.reduce((a,g)=>a+g.tasks.filter(t=>checked[t.key]).length,0);
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#F2F2F7",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"16px 0 0",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
+        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px",flexShrink:0}}/>
+        <div style={{padding:"0 20px 12px",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+            <div style={{width:42,height:42,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,fontWeight:700,flexShrink:0}}>{t.initial}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.3}}>{t.name}'s Tasks</div>
+              <div style={{fontSize:12,color:"#8E8E93",marginTop:1}}>{doneCount}/{totalCount} done · {grouped.length} {grouped.length===1?"day":"days"}</div>
+            </div>
+            <button onClick={onClose} style={{background:"#E5E5EA",border:"none",borderRadius:"50%",width:30,height:30,fontSize:16,color:"#8E8E93",cursor:"pointer",flexShrink:0,fontWeight:600,lineHeight:1}}>×</button>
+          </div>
+          <div style={{display:"flex",background:"#E5E5EA",borderRadius:10,padding:2,gap:0}}>
+            {["week","all"].map(opt=>(
+              <button key={opt} onClick={()=>setScope(opt)} style={{flex:1,background:scope===opt?"#fff":"transparent",border:"none",borderRadius:8,padding:"7px 12px",fontSize:13,fontWeight:600,color:scope===opt?"#1C1C1E":"#8E8E93",cursor:"pointer",boxShadow:scope===opt?"0 1px 2px rgba(0,0,0,0.1)":"none"}}>{opt==="week"?`Week ${currentWeek+1}`:"All 30 days"}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"4px 16px 24px"}}>
+          {grouped.length===0
+            ? <div style={{padding:"30px 20px",textAlign:"center",color:"#8E8E93",fontSize:14}}>
+                No tasks assigned to {t.name} {scope==="week"?"this week":"yet"}.
+                <div style={{fontSize:12,marginTop:8,lineHeight:1.5}}>Long-press any task to assign it.</div>
+              </div>
+            : grouped.map(g=>{
+                const cc=CAT_COLOR[g.day.cat]||"#8E8E93";
+                return (
+                  <div key={g.day.day} style={{background:"#fff",borderRadius:14,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+                    <button onClick={()=>onOpenDay(g.day)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"transparent",border:"none",cursor:"pointer",width:"100%",borderBottom:"1px solid #F2F2F7",textAlign:"left"}}>
+                      <div style={{width:26,height:26,borderRadius:"50%",background:`${cc}15`,color:cc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{g.day.day}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E"}}>{g.day.title}</div>
+                        <div style={{fontSize:11,color:cc,fontWeight:600,marginTop:1}}>{g.day.cat}</div>
+                      </div>
+                      <span style={{color:"#C7C7CC",fontSize:16}}>›</span>
+                    </button>
+                    {g.tasks.map((task,i)=>{
+                      const isDone = checked[task.key];
+                      return (
+                        <div key={task.key} onClick={()=>onToggle(task.key)} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",cursor:"pointer",background:isDone?`${cc}08`:"transparent",borderBottom:i<g.tasks.length-1?"1px solid #F2F2F7":"none"}}>
+                          <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            {isDone&&<span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
+                          </div>
+                          <span style={{fontSize:14,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.4,textDecoration:isDone?"line-through":"none",flex:1}}>{task.text}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Long-press action sheet ---------- */
+function TaskActionSheet({task,dayObj,assignedE,assignedC,onEdit,onAssignE,onAssignC,onDelete,onClose}){
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"14px 0 env(safe-area-inset-bottom,16px)"}}>
+        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px"}}/>
+        <div style={{padding:"0 20px 12px",borderBottom:"1px solid #F2F2F7"}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:4}}>Day {dayObj.day} · {dayObj.title}</div>
+          <div style={{fontSize:14,color:"#1C1C1E",lineHeight:1.4}}>{task.text}</div>
+        </div>
+        <MenuRow icon="✏️" label="Edit task" onClick={onEdit}/>
+        <MenuRow icon={<PersonDot p="e"/>} label={assignedE?"Unassign Edward":"Assign to Edward"} onClick={onAssignE}/>
+        <MenuRow icon={<PersonDot p="c"/>} label={assignedC?"Unassign Clarissa":"Assign to Clarissa"} onClick={onAssignC}/>
+        <MenuRow icon="🗑️" label={task.builtin?"Delete (can restore later)":"Delete task"} onClick={onDelete} destructive/>
+        <div style={{padding:"10px 16px 0"}}>
+          <button onClick={onClose} style={{width:"100%",background:"#F2F2F7",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:600,color:"#1C1C1E",cursor:"pointer"}}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function MenuRow({icon,label,onClick,destructive}){
+  return (
+    <button onClick={onClick} style={{width:"100%",background:"transparent",border:"none",padding:"14px 20px",display:"flex",alignItems:"center",gap:12,fontSize:15,color:destructive?"#FF3B30":"#1C1C1E",cursor:"pointer",fontWeight:500,textAlign:"left"}}>
+      <span style={{width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{icon}</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+function PersonDot({p}){
+  const t = personTheme(p);
+  return <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,height:20,borderRadius:"50%",background:t.solid,color:"#fff",fontSize:11,fontWeight:700}}>{t.initial}</span>;
+}
+
+/* ---------- Sync ---------- */
 function SyncBar({status,code,accent,onClick}){
   let icon="📱",label="Local only",action="Enable sync";
   if(status==="connecting"){icon="☁️";label="Connecting…";action="";}
@@ -407,7 +612,6 @@ function SyncBar({status,code,accent,onClick}){
     </button>
   );
 }
-
 function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,showToast}){
   const[input,setInput]=useState("");
   const isSynced = status==="synced" && currentCode;
@@ -415,15 +619,12 @@ function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,sh
     if(!currentCode)return;
     navigator.clipboard?.writeText(currentCode).then(()=>showToast("Code copied")).catch(()=>prompt("Copy this:",currentCode));
   };
-  const handleGenerate=()=>{setInput(newSyncCode());};
-  const handleConnect=()=>onActivate(input);
   return(
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,borderTopLeftRadius:24,borderTopRightRadius:24,padding:"20px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto"}}>
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"20px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto"}}>
         <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 16px"}}/>
         <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>Sync across devices</div>
-        <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>Use the same sync code on multiple devices to keep your checkboxes, notes, and custom tasks in sync.</div>
-
+        <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>Use the same sync code on multiple devices to keep your data in sync.</div>
         {isSynced&&(
           <div style={{background:`${accent}10`,border:`1px solid ${accent}30`,borderRadius:14,padding:"14px 16px",marginBottom:16}}>
             <div style={{fontSize:11,fontWeight:700,color:accent,letterSpacing:0.5,textTransform:"uppercase",marginBottom:6}}>☁️ Currently synced</div>
@@ -431,52 +632,91 @@ function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,sh
               <code style={{flex:1,fontSize:14,fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",color:"#1C1C1E",background:"#fff",padding:"8px 10px",borderRadius:8,border:"1px solid #E5E5EA",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{currentCode}</code>
               <button onClick={copyCode} style={{background:accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,fontWeight:600,cursor:"pointer",flexShrink:0}}>Copy</button>
             </div>
-            <div style={{fontSize:12,color:"#8E8E93",marginTop:10,lineHeight:1.5}}>To add another device: open the app there, tap the sync bar, and enter this code below.</div>
           </div>
         )}
-
-        <div style={{fontSize:12,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:8}}>{isSynced?"Switch to a different code":"Set up sync"}</div>
+        <div style={{fontSize:12,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:8}}>{isSynced?"Switch code":"Set up sync"}</div>
         <div style={{display:"flex",gap:8,marginBottom:10}}>
-          <input
-            type="text"
-            value={input}
-            onChange={e=>setInput(e.target.value)}
-            placeholder="Enter or generate a code"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            style={{flex:1,border:"1px solid #E5E5EA",borderRadius:12,padding:"11px 14px",fontSize:15,fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",color:"#1C1C1E",background:"#FAFAFA",minWidth:0}}/>
-          <button onClick={handleGenerate} style={{background:"#F2F2F7",color:"#1C1C1E",border:"none",borderRadius:12,padding:"0 14px",fontSize:13,fontWeight:600,cursor:"pointer",flexShrink:0}}>Generate</button>
+          <input type="text" value={input} onChange={e=>setInput(e.target.value)} placeholder="Enter or generate a code" autoCapitalize="off" autoCorrect="off" spellCheck={false} style={{flex:1,border:"1px solid #E5E5EA",borderRadius:12,padding:"11px 14px",fontSize:15,fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace",color:"#1C1C1E",background:"#FAFAFA",minWidth:0}}/>
+          <button onClick={()=>setInput(newSyncCode())} style={{background:"#F2F2F7",color:"#1C1C1E",border:"none",borderRadius:12,padding:"0 14px",fontSize:13,fontWeight:600,cursor:"pointer",flexShrink:0}}>Generate</button>
         </div>
-        <button onClick={handleConnect} disabled={input.trim().length<6} style={{width:"100%",background:input.trim().length>=6?accent:"#E5E5EA",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:600,cursor:input.trim().length>=6?"pointer":"default",marginBottom:isSynced?10:16}}>{isSynced?"Switch code":"Connect"}</button>
-
-        <div style={{fontSize:12,color:"#8E8E93",lineHeight:1.5,marginBottom:isSynced?16:0}}>
-          <strong style={{color:"#1C1C1E"}}>How it works:</strong> On your first device, tap Generate and Connect — that creates your code. On your second device, type the same code and Connect. Both devices will then stay in sync.
-        </div>
-
-        {isSynced&&(
-          <button onClick={onDisconnect} style={{width:"100%",background:"#fff",color:"#FF3B30",border:"1px solid #FFD7D5",borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer",marginBottom:10}}>Stop syncing on this device</button>
-        )}
+        <button onClick={()=>onActivate(input)} disabled={input.trim().length<6} style={{width:"100%",background:input.trim().length>=6?accent:"#E5E5EA",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:600,cursor:input.trim().length>=6?"pointer":"default",marginBottom:isSynced?10:16}}>{isSynced?"Switch code":"Connect"}</button>
+        {isSynced&&<button onClick={onDisconnect} style={{width:"100%",background:"#fff",color:"#FF3B30",border:"1px solid #FFD7D5",borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer",marginBottom:10}}>Stop syncing on this device</button>}
         <button onClick={onClose} style={{width:"100%",background:"none",color:"#8E8E93",border:"none",padding:"10px",fontSize:14,fontWeight:600,cursor:"pointer"}}>Close</button>
       </div>
     </div>
   );
 }
 
-function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,onNoteChange,onBack,onShare}){
+/* ---------- TaskRow with long-press ---------- */
+function TaskRow({task, dayNum, isDone, isEditing, assignedE, assignedC, cc, onToggle, onLongPress, onEditSave, onEditCancel}){
+  const [editText, setEditText] = useState(task.text);
+  useEffect(()=>{setEditText(task.text);},[task.text,isEditing]);
+  const pressRef = useRef({timer:null,triggered:false,startX:0,startY:0});
+
+  const start = (e) => {
+    pressRef.current.triggered=false;
+    const t = e.touches?.[0] || e;
+    pressRef.current.startX = t?.clientX||0;
+    pressRef.current.startY = t?.clientY||0;
+    pressRef.current.timer = setTimeout(()=>{
+      pressRef.current.triggered=true;
+      try{navigator.vibrate&&navigator.vibrate(40);}catch{};
+      onLongPress();
+    },500);
+  };
+  const cancel = ()=>{if(pressRef.current.timer){clearTimeout(pressRef.current.timer);pressRef.current.timer=null;}};
+  const move = (e) => {
+    if(!pressRef.current.timer) return;
+    const t = e.touches?.[0] || e;
+    if(Math.abs(t.clientX-pressRef.current.startX)>10 || Math.abs(t.clientY-pressRef.current.startY)>10) cancel();
+  };
+  const click = ()=>{if(pressRef.current.triggered){pressRef.current.triggered=false;return;} onToggle();};
+  const ctx = (e)=>{e.preventDefault();cancel();pressRef.current.triggered=true;onLongPress();};
+
+  if(isEditing){
+    return (
+      <div style={{padding:"12px 16px",background:"#FFFBEB",borderBottom:"1px solid #F2F2F7"}}>
+        <textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)}
+          style={{width:"100%",border:"1px solid #E5E5EA",borderRadius:10,padding:"10px 12px",fontSize:15,minHeight:64,resize:"vertical",background:"#fff",color:"#1C1C1E",lineHeight:1.4}}/>
+        <div style={{display:"flex",gap:8,marginTop:8,justifyContent:"flex-end"}}>
+          <button onClick={onEditCancel} style={{background:"#F2F2F7",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:600,color:"#1C1C1E",cursor:"pointer"}}>Cancel</button>
+          <button onClick={()=>onEditSave(editText)} style={{background:cc,color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:600,cursor:"pointer"}}>Save</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onClick={click}
+      onTouchStart={start} onTouchEnd={cancel} onTouchMove={move} onTouchCancel={cancel}
+      onMouseDown={start} onMouseUp={cancel} onMouseLeave={cancel}
+      onContextMenu={ctx}
+      style={{display:"flex",alignItems:"center",gap:12,padding:"14px 16px",cursor:"pointer",background:isDone?`${cc}08`:(task.builtin?"transparent":"#FAFAFA"),borderBottom:"1px solid #F2F2F7",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
+      <div style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+        {isDone&&<span style={{color:"#fff",fontSize:13,lineHeight:1,fontWeight:700}}>✓</span>}
+      </div>
+      <span style={{fontSize:15,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.45,textDecoration:isDone?"line-through":"none",flex:1,minWidth:0,wordBreak:"break-word"}}>{task.text}</span>
+      <div style={{display:"flex",gap:3,flexShrink:0,marginLeft:4}}>
+        {assignedE&&<PersonDot p="e"/>}
+        {assignedC&&<PersonDot p="c"/>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- DayDetail ---------- */
+function DayDetail({d,checked,custom,overrides,deleted,assignedE,assignedC,note,editingKey,onToggle,onLongPress,onAddCustom,onNoteChange,onEditSave,onEditCancel,onRestoreDeleted,onBack}){
   const cc=CAT_COLOR[d.cat]||"#8E8E93";
   const [newTask,setNewTask]=useState("");
-  const builtDone=d.tasks.filter((_,i)=>checked[`${d.day}-${i}`]).length;
-  const customDone=custom.filter(t=>checked[`${d.day}-c${t.id}`]).length;
-  const done=builtDone+customDone;
-  const total=d.tasks.length+custom.length;
-  const pct=total?Math.round(done/total*100):0;
-  const allDone=total>0&&done===total;
+  const tasks = effectiveTasks(d, overrides, deleted, custom);
+  const done = tasks.filter(t=>checked[t.key]).length;
+  const total = tasks.length;
+  const pct = total?Math.round(done/total*100):0;
+  const allDone = total>0 && done===total;
+  const deletedCount = Object.keys(deleted).filter(k=>k.startsWith(`${d.day}-`) && !k.includes("-c")).length;
 
-  const submit=()=>{
-    const t=newTask.trim();if(!t)return;
-    onAddCustom(t);setNewTask("");
-  };
+  const submit=()=>{const t=newTask.trim();if(!t)return;onAddCustom(t);setNewTask("");};
 
   return(
     <div>
@@ -484,9 +724,7 @@ function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,on
         <button onClick={onBack} style={{background:"none",border:"none",color:cc,cursor:"pointer",fontSize:16,fontWeight:600,padding:0,display:"flex",alignItems:"center",gap:4}}>
           <span style={{fontSize:22}}>‹</span> Back
         </button>
-        <button onClick={onShare} style={{background:`${cc}15`,border:"none",color:cc,cursor:"pointer",fontSize:13,fontWeight:600,padding:"8px 16px",borderRadius:99,display:"flex",alignItems:"center",gap:6}}>
-          <span>📤</span> Share Day
-        </button>
+        <div style={{fontSize:11,color:"#8E8E93",fontWeight:500}}>Long-press a task for options</div>
       </div>
       <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,0.08)",marginBottom:16}}>
         <div style={{height:5,background:allDone?cc:`${cc}40`}}/>
@@ -507,46 +745,43 @@ function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,on
           </div>
         </div>
 
-        <div style={{padding:"8px 0"}}>
-          {d.tasks.map((t,i)=>{
-            const key=`${d.day}-${i}`;const isDone=checked[key];
-            return(
-              <div key={i} onClick={()=>onToggle(key)} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",cursor:"pointer",background:isDone?`${cc}08`:"transparent",transition:"background 0.15s",borderBottom:"1px solid #F2F2F7"}}>
-                <div style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s"}}>
-                  {isDone&&<span style={{color:"#fff",fontSize:13,lineHeight:1,fontWeight:700}}>✓</span>}
-                </div>
-                <span style={{fontSize:15,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.45,textDecoration:isDone?"line-through":"none",transition:"all 0.2s",flex:1}}>{t}</span>
-              </div>
-            );
-          })}
-
-          {custom.length>0&&(
+        <div style={{padding:"4px 0"}}>
+          {tasks.filter(t=>t.builtin).map(t=>(
+            <TaskRow key={t.key} task={t} dayNum={d.day} isDone={checked[t.key]} isEditing={editingKey===t.key}
+              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} cc={cc}
+              onToggle={()=>onToggle(t.key)}
+              onLongPress={()=>onLongPress(t)}
+              onEditSave={text=>onEditSave(t,text)}
+              onEditCancel={onEditCancel}/>
+          ))}
+          {tasks.filter(t=>!t.builtin).length>0&&(
             <div style={{padding:"12px 20px 6px",fontSize:11,fontWeight:700,color:"#8E8E93",textTransform:"uppercase",letterSpacing:0.5,background:"#FAFAFA"}}>Your tasks</div>
           )}
-          {custom.map((t,i)=>{
-            const key=`${d.day}-c${t.id}`;const isDone=checked[key];
-            return(
-              <div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",background:isDone?`${cc}08`:"#FAFAFA",borderBottom:"1px solid #F2F2F7"}}>
-                <div onClick={()=>onToggle(key)} style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",transition:"all 0.2s"}}>
-                  {isDone&&<span style={{color:"#fff",fontSize:13,lineHeight:1,fontWeight:700}}>✓</span>}
-                </div>
-                <span onClick={()=>onToggle(key)} style={{fontSize:15,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.45,textDecoration:isDone?"line-through":"none",transition:"all 0.2s",flex:1,cursor:"pointer"}}>{t.text}</span>
-                <button onClick={()=>{if(confirm("Delete this task?"))onRemoveCustom(t.id);}} style={{background:"none",border:"none",color:"#C7C7CC",cursor:"pointer",fontSize:20,lineHeight:1,padding:"0 4px",flexShrink:0}} aria-label="Delete task">×</button>
-              </div>
-            );
-          })}
+          {tasks.filter(t=>!t.builtin).map(t=>(
+            <TaskRow key={t.key} task={t} dayNum={d.day} isDone={checked[t.key]} isEditing={editingKey===t.key}
+              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} cc={cc}
+              onToggle={()=>onToggle(t.key)}
+              onLongPress={()=>onLongPress(t)}
+              onEditSave={text=>onEditSave(t,text)}
+              onEditCancel={onEditCancel}/>
+          ))}
 
-          <div style={{display:"flex",gap:8,padding:"12px 16px 16px"}}>
-            <input
-              type="text"
-              value={newTask}
-              onChange={e=>setNewTask(e.target.value)}
+          <div style={{display:"flex",gap:8,padding:"12px 16px 12px"}}>
+            <input type="text" value={newTask} onChange={e=>setNewTask(e.target.value)}
               onKeyDown={e=>{if(e.key==="Enter")submit();}}
               placeholder="Add your own task…"
-              style={{flex:1,border:"1px solid #E5E5EA",borderRadius:12,padding:"10px 14px",fontSize:15,background:"#fff",color:"#1C1C1E",minWidth:0}}
-            />
+              style={{flex:1,border:"1px solid #E5E5EA",borderRadius:12,padding:"10px 14px",fontSize:15,background:"#fff",color:"#1C1C1E",minWidth:0}}/>
             <button onClick={submit} disabled={!newTask.trim()} style={{background:newTask.trim()?cc:"#E5E5EA",color:"#fff",border:"none",borderRadius:12,padding:"0 16px",fontSize:14,fontWeight:600,cursor:newTask.trim()?"pointer":"default",flexShrink:0}}>Add</button>
           </div>
+
+          {deletedCount>0&&(
+            <div style={{padding:"6px 20px 14px"}}>
+              <button onClick={()=>{if(confirm(`Restore ${deletedCount} deleted task(s)?`))onRestoreDeleted();}}
+                style={{background:"none",border:"none",color:cc,fontSize:13,fontWeight:600,cursor:"pointer",padding:0}}>
+                ↺ Restore {deletedCount} deleted task{deletedCount===1?"":"s"}
+              </button>
+            </div>
+          )}
         </div>
 
         {allDone&&(
@@ -562,12 +797,9 @@ function DayDetail({d,checked,custom,note,onToggle,onAddCustom,onRemoveCustom,on
           <div style={{fontSize:12,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase"}}>Notes</div>
           {note&&<span style={{fontSize:11,color:"#8E8E93"}}>{note.length} chars</span>}
         </div>
-        <textarea
-          value={note}
-          onChange={e=>onNoteChange(e.target.value)}
+        <textarea value={note} onChange={e=>onNoteChange(e.target.value)}
           placeholder="What happened today? Results, lessons, follow-ups…"
-          style={{width:"100%",minHeight:120,border:"1px solid #E5E5EA",borderRadius:12,padding:"12px 14px",fontSize:15,lineHeight:1.5,color:"#1C1C1E",background:"#FAFAFA",resize:"vertical"}}
-        />
+          style={{width:"100%",minHeight:120,border:"1px solid #E5E5EA",borderRadius:12,padding:"12px 14px",fontSize:15,lineHeight:1.5,color:"#1C1C1E",background:"#FAFAFA",resize:"vertical"}}/>
       </div>
     </div>
   );
