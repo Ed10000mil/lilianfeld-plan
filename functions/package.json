@@ -1,0 +1,13 @@
+{
+  "name": "lilianfeld-functions",
+  "description": "Cloud Functions for Lilianfeld pings",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.0.1"
+  },
+  "private": true
+}

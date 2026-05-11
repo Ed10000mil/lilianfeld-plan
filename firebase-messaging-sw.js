@@ -10,30 +10,11 @@ firebase.initializeApp({
   appId: "1:1098965869642:web:c42ba903109c8a4b5a32b3"
 });
 
-const messaging = firebase.messaging();
-
-messaging.onBackgroundMessage(payload => {
-  const title = (payload.notification && payload.notification.title) || (payload.data && payload.data.title) || 'Lilianfeld';
-  const body  = (payload.notification && payload.notification.body)  || (payload.data && payload.data.body)  || '';
-  const iconUrl = new URL('icon-192.png', self.registration.scope).href;
-  self.registration.showNotification(title, {
-    body,
-    icon: iconUrl,
-    badge: iconUrl,
-    data: { url: self.registration.scope, ...(payload.data || {}) },
-    tag: payload.data && payload.data.taskKey ? `task-${payload.data.taskKey}` : undefined
-  });
-});
-
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || self.registration.scope;
-  e.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      for (const c of list) {
-        if (c.url.startsWith(url) && 'focus' in c) return c.focus();
-      }
-      return clients.openWindow(url);
-    })
-  );
-});
+// Initialize Firebase Messaging. FCM's built-in service worker handler
+// auto-displays incoming notifications using the `notification` payload
+// of the message (icon/badge/click URL come from the `webpush` block).
+//
+// We intentionally do NOT register a custom onBackgroundMessage handler,
+// because that would call showNotification() again and produce a duplicate
+// notification on top of FCM's default one.
+firebase.messaging();
