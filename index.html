@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="Lilianfeld"/>
+<meta name="theme-color" content="#F2F2F7"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-180.png"/>
+<link rel="icon" type="image/png" href="icon-192.png"/>
+<title>Lilianfeld 30-Day Plan</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:#F2F2F7;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;overscroll-behavior:none}
+  button{font-family:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useCallback}=React;
+const WEEKS=[
+  {label:"Week 1",subtitle:"Fix the Foundation",  accent:"#FF9500",icon:"🔧"},
+  {label:"Week 2",subtitle:"Awareness & Feedback", accent:"#AF52DE",icon:"📣"},
+  {label:"Week 3",subtitle:"Push Distribution",    accent:"#30B950",icon:"🚀"},
+  {label:"Week 4",subtitle:"Build Momentum",       accent:"#FF3B30",icon:"🔥"},
+];
+const CAT_COLOR={
+  "Website":"#007AFF","Content":"#FF9500","Social":"#FF2D55",
+  "Ads":"#5856D6","Influencers":"#AF52DE","Retail":"#30B950",
+};
+const DAYS=[
+  {day:1,week:0,title:"Product Page Audit",cat:"Website",tasks:["Open site on phone & desktop","Run the 3-second clarity test","Verify all components shown (holder, cup, refill, lit candle)","Write down everything confusing","Request or make changes"]},
+  {day:2,week:0,title:"Improve Product Messaging",cat:"Website",tasks:["Rewrite the main headline","Add 3–5 benefit bullets","Add 'How it Works' section","Add 'What's Included' section","Add 'Why it's Different' section"]},
+  {day:3,week:0,title:"Trust-Building",cat:"Website",tasks:["Add hotel/restaurant credibility line","Add early reviews & testimonials","Add shipping, returns & contact info","Add FAQ (6 key questions)"]},
+  {day:4,week:0,title:"Tracking Check",cat:"Ads",tasks:["Test Google Analytics","Test Google Ads conversion tracking","Test Meta Pixel","Verify add-to-cart / checkout / purchase events","Run one full test order"]},
+  {day:5,week:0,title:"Photo & Video Shot List",cat:"Content",tasks:["List 10 must-have photos","List 5 must-have videos","Assign photographer or self","Schedule the shoot"]},
+  {day:6,week:0,title:"Create First 5 Short Videos",cat:"Content",tasks:['"Normal pillar candles melt. This doesn\'t."','"How our refillable system works."','"Real flame, cleaner table."','"The holder stays. Only the refill changes."','"Dinner table ambiance in seconds."']},
+  {day:7,week:0,title:"Launch Organic Content",cat:"Social",tasks:["Post one Reel","Post one Story explaining the product","Add product highlight on Instagram","Add 'How it Works' highlight","Send page to 5 trusted people for feedback"]},
+  {day:8,week:1,title:"Build Influencer List",cat:"Influencers",tasks:["Identify 30 Dubai micro-influencers","Categories: home décor, hosting, florals, gifting, luxury lifestyle","Build tracking sheet with handle, followers, engagement, contact"]},
+  {day:9,week:1,title:"Contact First 10 Influencers",cat:"Influencers",tasks:["Send personalised gift-offer message to 10 influencers","Goal: get product into good hands, not hard sell","Log all replies in tracking sheet"]},
+  {day:10,week:1,title:"Build Retail Partner List",cat:"Retail",tasks:["List 20 potential physical partners","Targets: flower shops, gift shops, home décor, hotels, spas","Track name, location, Instagram, contact, fit"]},
+  {day:11,week:1,title:"Visit / Contact First 5 Shops",cat:"Retail",tasks:["Contact or visit 5 premium locations","Lead with sample offer, not full pitch","Log interest level for each"]},
+  {day:12,week:1,title:"Create Retail Display Concept",cat:"Retail",tasks:["Prepare display: holder + cup + refill + lifestyle photo","Write explanation card copy","Create QR code + shop discount code","Finalise signage copy"]},
+  {day:13,week:1,title:"Google Ads Cleanup",cat:"Ads",tasks:["Review search terms, CPC, add-to-carts, bounces","Pause broad or irrelevant keywords","Focus on: refillable candles, luxury candle holder, candles Dubai"]},
+  {day:14,week:1,title:"Launch Retargeting Audiences",cat:"Ads",tasks:["Build audiences: visitors, product viewers, ATC, Instagram engagers, video viewers","Write retargeting ad copy","Launch retargeting campaign"]},
+  {day:15,week:2,title:"Post Comparison Content",cat:"Content",tasks:["Create normal vs Lilianfeld comparison graphic","Post on Instagram feed","Share in Stories","Repurpose as Reel"]},
+  {day:16,week:2,title:"Follow Up + 10 More Influencers",cat:"Influencers",tasks:["Follow up with first 10 influencers","Contact 10 new influencers","Update tracking sheet"]},
+  {day:17,week:2,title:"Visit 5 More Shops",cat:"Retail",tasks:["Contact next 5 physical locations","Test Offer A: display + QR commission","Test Offer B: small wholesale starter pack","Prefer Offer A at this stage"]},
+  {day:18,week:2,title:"'How It Works' Page",cat:"Website",tasks:["Add 4-step process section to site","Add safety warning: only use Lilianfeld refills","Reinforce the refill system loop visually"]},
+  {day:19,week:2,title:"Create Launch Offer",cat:"Website",tasks:["Design bundle: Holder + glass cup + refill pack","Set launch pricing","Add bundle to website","Promote in content and ads"]},
+  {day:20,week:2,title:"Start Small Meta Ad Test",cat:"Ads",tasks:["Launch 3–5 small ads with different hooks","Test 5 angles: ambiance, refillable, hospitality, dinner table","Don't spend heavily — find the winner first"]},
+  {day:21,week:2,title:"Review All Data",cat:"Ads",tasks:["Review: video views, engagement, ad hooks, site metrics","Write down top 5 customer objections","Update website & content to address them"]},
+  {day:22,week:3,title:"Install First Physical Display",cat:"Retail",tasks:["Set up display in first flower/home shop","Include QR, discount code, card, sample, price","Start tracking QR scans, purchases, feedback"]},
+  {day:23,week:3,title:"Customer Education Carousel",cat:"Social",tasks:["Create 6-slide Instagram carousel","Slides: new way → problem → holder → refill → benefits → available now","Post + share in Stories"]},
+  {day:24,week:3,title:"Push Gifting Angle",cat:"Content",tasks:["Create gifting-focused content","Occasions: housewarming, birthdays, Ramadan/Eid, weddings, hostess gifts","Message: beautiful gift for hosting lovers"]},
+  {day:25,week:3,title:"Contact Event Planners & Florists",cat:"Retail",tasks:["Contact 10 event planners/florists","Pitch for events, weddings, dinner setups","Opens both B2C and B2B demand"]},
+  {day:26,week:3,title:"Improve Ads Based on Winners",cat:"Ads",tasks:["Kill all weak ads","Scale only: high CTR, low CPC, add-to-carts, purchases","Let data decide, not aesthetics"]},
+  {day:27,week:3,title:"Refill Reorder Messaging",cat:"Website",tasks:["Add 'Refill packs for easy reordering' messaging","Communicate the system loop clearly","Copy: 'Once you have the holder, simply reorder refills'"]},
+  {day:28,week:3,title:"Follow Up With All Shops",cat:"Retail",tasks:["Follow up every shop contacted","Goal: 2–3 display tests live","Use the premium location selection angle"]},
+  {day:29,week:3,title:"Customer Reaction Content",cat:"Content",tasks:["Ask friends/buyers/influencers 5 reaction questions","Turn answers into social proof content","Best quote: 'I didn't realise the holder stays the same…'"]},
+  {day:30,week:3,title:"Decide What to Scale",cat:"Ads",tasks:["Score every channel: Google, Meta, Instagram, Influencers, Shops, Event Planners, Website","Decide: scale / stop / improve for each","Plan Month 2 priorities"]},
+];
+const DAILY=["Post or prepare one piece of content","Contact 3–5 new people","Check website & ad performance","Improve one small part of the funnel","Collect one piece of feedback"];
+function shareText(text){
+  if(navigator.share){navigator.share({title:"Lilianfeld 30-Day Plan",text}).catch(()=>{})}
+  else{navigator.clipboard?.writeText(text).then(()=>alert("Copied to clipboard!")).catch(()=>prompt("Copy this:",text))}
+}
+function buildDayShare(d,checked){
+  return`📋 Lilianfeld — Day ${d.day}: ${d.title}\n\n`+d.tasks.map((t,i)=>`${checked[`${d.day}-${i}`]?"✅":"⬜"} ${t}`).join("\n")+`\n\n🕯 lilianfeld.com`;
+}
+function buildWeekShare(wi,checked){
+  const wDays=DAYS.filter(d=>d.week===wi);
+  return`🕯 Lilianfeld — ${WEEKS[wi].label}: ${WEEKS[wi].subtitle}\n\n`+wDays.map(d=>{
+    const done=d.tasks.filter((_,i)=>checked[`${d.day}-${i}`]).length;
+    return`Day ${d.day}: ${d.title} ${done}/${d.tasks.length} ${"█".repeat(done)}${"░".repeat(d.tasks.length-done)}`;
+  }).join("\n")+`\n\n🕯 lilianfeld.com`;
+}
+function App(){
+  const[week,setWeek]=useState(0);
+  const[activeDay,setActiveDay]=useState(null);
+  const[checked,setChecked]=useState({});
+  const[toast,setToast]=useState(null);
+  useEffect(()=>{try{const s=localStorage.getItem("lf_v1");if(s)setChecked(JSON.parse(s))}catch{};},[]);
+  const toggle=k=>{setChecked(p=>{const n={...p,[k]:!p[k]};try{localStorage.setItem("lf_v1",JSON.stringify(n))}catch{};return n;});};
+  const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2200);};
+  const total=DAYS.reduce((a,d)=>a+d.tasks.length,0);
+  const done=Object.values(checked).filter(Boolean).length;
+  const pct=Math.round(done/total*100);
+  const W=WEEKS[week];
+  const weekDays=DAYS.filter(d=>d.week===week);
+  const s={
+    wrap:{fontFamily:"-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif",background:"#F2F2F7",minHeight:"100vh",maxWidth:430,margin:"0 auto",paddingBottom:80},
+    hdr:{background:"rgba(242,242,247,0.92)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",padding:"env(safe-area-inset-top,44px) 20px 14px",position:"sticky",top:0,zIndex:10,borderBottom:"1px solid rgba(0,0,0,0.08)"},
+    body:{padding:"16px 16px 0"},
+  };
+  return(
+    <div style={s.wrap}>
+      {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1C1C1E",color:"#fff",fontSize:13,fontWeight:500,padding:"9px 18px",borderRadius:99,zIndex:999,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap"}}>{toast}</div>}
+      <div style={s.hdr}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:11,fontWeight:600,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:2}}>Lilianfeld Candles</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.5}}>{activeDay?`Day ${activeDay.day}`:"30-Day Plan"}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:26,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.5}}>{pct}<span style={{fontSize:14,color:"#8E8E93",fontWeight:500}}>%</span></div>
+            <div style={{fontSize:11,color:"#8E8E93"}}>{done}/{total} done</div>
+          </div>
+        </div>
+        <div style={{marginTop:10,height:4,background:"#D1D1D6",borderRadius:99,overflow:"hidden"}}>
+          <div style={{height:"100%",width:`${pct}%`,background:W.accent,borderRadius:99,transition:"width 0.4s"}}/>
+        </div>
+      </div>
+      <div style={s.body}>
+        {activeDay
+          ? <DayDetail d={activeDay} checked={checked} toggle={toggle} onBack={()=>setActiveDay(null)}
+              onShare={()=>{shareText(buildDayShare(activeDay,checked));showToast("Shared!");}}/>
+          : <>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+              {WEEKS.map((wk,i)=>{
+                const wDs=DAYS.filter(d=>d.week===i);
+                const wD=wDs.reduce((a,d)=>a+d.tasks.filter((_,ti)=>checked[`${d.day}-${ti}`]).length,0);
+                const wT=wDs.reduce((a,d)=>a+d.tasks.length,0);
+                const act=week===i;
+                return(
+                  <button key={i} onClick={()=>setWeek(i)} style={{border:"none",borderRadius:16,padding:"14px 14px",cursor:"pointer",textAlign:"left",background:act?wk.accent:"#fff",boxShadow:act?`0 4px 16px ${wk.accent}50`:"0 1px 4px rgba(0,0,0,0.08)",transform:act?"scale(1.02)":"scale(1)",transition:"all 0.2s"}}>
+                    <div style={{fontSize:20,marginBottom:4}}>{wk.icon}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:act?"rgba(255,255,255,0.7)":"#8E8E93",textTransform:"uppercase",letterSpacing:0.4}}>{wk.label}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:act?"#fff":"#1C1C1E",marginTop:2,lineHeight:1.3}}>{wk.subtitle}</div>
+                    <div style={{marginTop:8,height:3,background:act?"rgba(255,255,255,0.3)":"#E5E5EA",borderRadius:99,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${Math.round(wD/wT*100)}%`,background:act?"#fff":wk.accent,borderRadius:99}}/>
+                    </div>
+                    <div style={{fontSize:11,color:act?"rgba(255,255,255,0.65)":"#8E8E93",marginTop:4}}>{wD}/{wT} tasks</div>
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={()=>{shareText(buildWeekShare(week,checked));showToast("Week summary shared!");}}
+              style={{width:"100%",background:"#fff",border:"none",borderRadius:14,padding:"13px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.08)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:18}}>📤</span>
+                <span style={{fontSize:14,fontWeight:600,color:"#1C1C1E"}}>Share {W.label} Summary</span>
+              </div>
+              <span style={{fontSize:12,color:W.accent,fontWeight:600}}>Share →</span>
+            </button>
+            <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.08)",marginBottom:16}}>
+              {weekDays.map((d,idx)=>{
+                const cc=CAT_COLOR[d.cat]||"#8E8E93";
+                const prog=d.tasks.filter((_,i)=>checked[`${d.day}-${i}`]).length;
+                const dn=prog===d.tasks.length;
+                return(
+                  <div key={d.day}>
+                    {idx>0&&<div style={{height:1,background:"#F2F2F7",marginLeft:60}}/>}
+                    <div onClick={()=>setActiveDay(d)} style={{display:"flex",alignItems:"center",padding:"14px 16px",cursor:"pointer",gap:14,background:dn?`${cc}08`:"transparent"}}>
+                      <div style={{width:36,height:36,borderRadius:"50%",background:dn?cc:`${cc}15`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                        <span style={{fontSize:13,fontWeight:700,color:dn?"#fff":cc}}>{dn?"✓":d.day}</span>
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:15,fontWeight:600,color:dn?"#8E8E93":"#1C1C1E",marginBottom:3,textDecoration:dn?"line-through":"none"}}>{d.title}</div>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <span style={{fontSize:11,fontWeight:600,color:cc,background:`${cc}15`,padding:"2px 7px",borderRadius:99}}>{d.cat}</span>
+                          <span style={{fontSize:11,color:"#8E8E93"}}>{prog}/{d.tasks.length}</span>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                        <div style={{width:36,height:4,background:"#F2F2F7",borderRadius:99,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${Math.round(prog/d.tasks.length*100)}%`,background:cc,borderRadius:99}}/>
+                        </div>
+                        <span style={{color:"#C7C7CC",fontSize:18}}>›</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{background:"#1C1C1E",borderRadius:20,padding:"16px 18px",marginBottom:16}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:12}}>Daily Non-Negotiables</div>
+              {DAILY.map((t,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:i<DAILY.length-1?10:0}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:W.accent,flexShrink:0}}/>
+                  <span style={{fontSize:14,color:"#EBEBF5"}}>{t}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        }
+      </div>
+    </div>
+  );
+}
+function DayDetail({d,checked,toggle,onBack,onShare}){
+  const cc=CAT_COLOR[d.cat]||"#8E8E93";
+  const done=d.tasks.filter((_,i)=>checked[`${d.day}-${i}`]).length;
+  const pct=Math.round(done/d.tasks.length*100);
+  const allDone=done===d.tasks.length;
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:cc,cursor:"pointer",fontSize:16,fontWeight:600,padding:0,display:"flex",alignItems:"center",gap:4}}>
+          <span style={{fontSize:22}}>‹</span> Back
+        </button>
+        <button onClick={onShare} style={{background:`${cc}15`,border:"none",color:cc,cursor:"pointer",fontSize:13,fontWeight:600,padding:"8px 16px",borderRadius:99,display:"flex",alignItems:"center",gap:6}}>
+          <span>📤</span> Share Day
+        </button>
+      </div>
+      <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,0.08)"}}>
+        <div style={{height:5,background:allDone?cc:`${cc}40`}}/>
+        <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #F2F2F7"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:600,color:"#8E8E93",textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>Day {d.day}</div>
+              <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.4,lineHeight:1.2}}>{d.title}</div>
+            </div>
+            <span style={{fontSize:12,fontWeight:600,color:cc,background:`${cc}15`,padding:"4px 10px",borderRadius:99,flexShrink:0,marginLeft:10}}>{d.cat}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:12,color:"#8E8E93"}}>{done} of {d.tasks.length} tasks</span>
+            <span style={{fontSize:12,fontWeight:700,color:allDone?cc:"#8E8E93"}}>{pct}%{allDone?" ✓":""}</span>
+          </div>
+          <div style={{height:5,background:"#F2F2F7",borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,background:cc,borderRadius:99,transition:"width 0.3s"}}/>
+          </div>
+        </div>
+        <div style={{padding:"8px 0"}}>
+          {d.tasks.map((t,i)=>{
+            const key=`${d.day}-${i}`;
+            const isDone=checked[key];
+            return(
+              <div key={i} onClick={()=>toggle(key)} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",cursor:"pointer",background:isDone?`${cc}08`:"transparent",transition:"background 0.15s",borderBottom:i<d.tasks.length-1?"1px solid #F2F2F7":"none"}}>
+                <div style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s"}}>
+                  {isDone&&<span style={{color:"#fff",fontSize:13,lineHeight:1,fontWeight:700}}>✓</span>}
+                </div>
+                <span style={{fontSize:15,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.45,textDecoration:isDone?"line-through":"none",transition:"all 0.2s",flex:1}}>{t}</span>
+              </div>
+            );
+          })}
+        </div>
+        {allDone&&(
+          <div style={{margin:"0 16px 16px",background:`${cc}15`,borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:20}}>🎉</span>
+            <span style={{fontSize:14,fontWeight:600,color:cc}}>Day {d.day} complete!</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
