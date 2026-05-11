@@ -16,6 +16,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-messaging-compat.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{background:#F2F2F7;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;overscroll-behavior:none}
@@ -41,6 +42,35 @@ const firebaseConfig = {
 if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
+
+const VAPID_KEY = "BDKvVb9QqmJiZSqf364dtyq9xlb5HXCZESBFn94Fq37mUcSrxrJteixIvcx3qyhV8KdBO_prxZbmm59iiGquqtQ";
+
+let _messaging=null;
+function getMessaging(){
+  try{
+    if(!_messaging && firebase.messaging && firebase.messaging.isSupported && firebase.messaging.isSupported()){
+      _messaging = firebase.messaging();
+    }
+  }catch(e){console.warn("Messaging init failed:",e);}
+  return _messaging;
+}
+async function setupPushForDevice(person, syncCode){
+  if(!('serviceWorker' in navigator)) throw new Error("Service workers not supported on this browser");
+  if(!firebase.messaging || !firebase.messaging.isSupported || !firebase.messaging.isSupported()) throw new Error("Push not supported here. On iPhone, the app must be installed to your home screen first.");
+  const permission = await Notification.requestPermission();
+  if(permission !== "granted") throw new Error("Notifications were denied. You can re-enable in Safari settings → Notifications.");
+  const reg = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
+  await navigator.serviceWorker.ready;
+  const m = getMessaging();
+  const token = await m.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+  if(!token) throw new Error("Couldn't generate a push token. Try again.");
+  await db.collection("devices").doc(token).set({
+    person, syncCode: syncCode || "",
+    lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
+    userAgent: navigator.userAgent
+  });
+  return token;
+}
 
 function newSyncCode(){
   const chars="abcdefghjkmnpqrstuvwxyz23456789";
@@ -98,7 +128,7 @@ const DAYS=[
 ];
 const DAILY=["Post or prepare one piece of content","Contact 3–5 new people","Check website & ad performance","Improve one small part of the funnel","Collect one piece of feedback"];
 
-/* effectiveTasks: returns array of {key,text,builtin,index,customId} for a day, applying overrides+deletes, plus custom tasks */
+/* ---------- Helpers ---------- */
 function effectiveTasks(d, overrides, deleted, custom){
   const built = d.tasks.map((t,i)=>{
     const key=`${d.day}-${i}`;
@@ -116,6 +146,40 @@ function dayCounts(d, checked, overrides, deleted, custom){
   return {done, total:tasks.length, tasks};
 }
 
+function toLocalDTInput(d){
+  const pad=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function formatRel(d){
+  const now=new Date();
+  const diff=(d.getTime()-now.getTime())/1000;
+  const opts={hour:'numeric',minute:'2-digit'};
+  const sameDay = d.toDateString()===now.toDateString();
+  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate()+1);
+  const sameTomorrow = d.toDateString()===tomorrow.toDateString();
+  if(diff<0) return `Overdue · ${d.toLocaleDateString()}`;
+  if(sameDay) return `Today, ${d.toLocaleTimeString([],opts)}`;
+  if(sameTomorrow) return `Tomorrow, ${d.toLocaleTimeString([],opts)}`;
+  if(diff < 7*86400) return `${d.toLocaleDateString([],{weekday:'short'})}, ${d.toLocaleTimeString([],opts)}`;
+  return d.toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+function presetTimes(){
+  const now=new Date();
+  const ps=[];
+  ps.push({label:"In 1 hour", value:new Date(now.getTime()+60*60*1000)});
+  const today6=new Date(now);today6.setHours(18,0,0,0);
+  if(today6.getTime()>now.getTime()+30*60*1000) ps.push({label:"Today, 6 PM", value:today6});
+  const today9=new Date(now);today9.setHours(21,0,0,0);
+  if(today9.getTime()>now.getTime()+30*60*1000) ps.push({label:"Today, 9 PM", value:today9});
+  const tomorrow9=new Date(now);tomorrow9.setDate(tomorrow9.getDate()+1);tomorrow9.setHours(9,0,0,0);
+  ps.push({label:"Tomorrow, 9 AM", value:tomorrow9});
+  const tomorrow6=new Date(now);tomorrow6.setDate(tomorrow6.getDate()+1);tomorrow6.setHours(18,0,0,0);
+  ps.push({label:"Tomorrow, 6 PM", value:tomorrow6});
+  const nextMon=new Date(now);const dum=((1-nextMon.getDay()+7)%7)||7;nextMon.setDate(nextMon.getDate()+dum);nextMon.setHours(9,0,0,0);
+  ps.push({label:`Next Mon, 9 AM`, value:nextMon});
+  return ps;
+}
+
 /* ---------- App ---------- */
 function App(){
   const[week,setWeek]=useState(0);
@@ -129,14 +193,22 @@ function App(){
   const[assignedC,setAssignedC]=useState({});
   const[toast,setToast]=useState(null);
 
-  const[menuTask,setMenuTask]=useState(null); // {dayObj, taskObj} for long-press menu
+  const[menuTask,setMenuTask]=useState(null);
   const[editingKey,setEditingKey]=useState(null);
-  const[personView,setPersonView]=useState(null); // "e" | "c" | null
+  const[personView,setPersonView]=useState(null);
 
   const[syncCode,setSyncCode]=useState(null);
   const[syncStatus,setSyncStatus]=useState("local");
   const[syncOpen,setSyncOpen]=useState(false);
   const remoteRef=useRef({checked:{},notes:{},custom:{},overrides:{},deleted:{},assignedE:{},assignedC:{}});
+
+  // Push / reminders
+  const[device,setDevice]=useState({person:null,token:null});
+  const[reminders,setReminders]=useState({}); // taskKey -> {id, ...}
+  const[pickerTask,setPickerTask]=useState(null); // {taskObj, dayObj}
+  const[showDeviceSetup,setShowDeviceSetup]=useState(false);
+  const[pendingReminder,setPendingReminder]=useState(null);
+  const[pushBusy,setPushBusy]=useState(false);
 
   /* Initial load */
   useEffect(()=>{
@@ -148,9 +220,10 @@ function App(){
     try{const ae=localStorage.getItem("lf_assigne_v1");if(ae)setAssignedE(JSON.parse(ae))}catch{};
     try{const ac=localStorage.getItem("lf_assignc_v1");if(ac)setAssignedC(JSON.parse(ac))}catch{};
     try{const sc=localStorage.getItem("lf_sync_code");if(sc)setSyncCode(sc)}catch{};
+    try{const dev=localStorage.getItem("lf_device_v1");if(dev)setDevice(JSON.parse(dev))}catch{};
   },[]);
 
-  /* Persist to localStorage */
+  /* Persist */
   useEffect(()=>{try{localStorage.setItem("lf_v1",JSON.stringify(checked))}catch{}},[checked]);
   useEffect(()=>{try{localStorage.setItem("lf_notes_v1",JSON.stringify(notes))}catch{}},[notes]);
   useEffect(()=>{try{localStorage.setItem("lf_custom_v1",JSON.stringify(custom))}catch{}},[custom]);
@@ -158,8 +231,9 @@ function App(){
   useEffect(()=>{try{localStorage.setItem("lf_deleted_v1",JSON.stringify(deleted))}catch{}},[deleted]);
   useEffect(()=>{try{localStorage.setItem("lf_assigne_v1",JSON.stringify(assignedE))}catch{}},[assignedE]);
   useEffect(()=>{try{localStorage.setItem("lf_assignc_v1",JSON.stringify(assignedC))}catch{}},[assignedC]);
+  useEffect(()=>{try{localStorage.setItem("lf_device_v1",JSON.stringify(device))}catch{}},[device]);
 
-  /* Firestore subscription */
+  /* Firestore subscription (main sync) */
   useEffect(()=>{
     if(!syncCode){setSyncStatus("local");return;}
     setSyncStatus("connecting");
@@ -168,15 +242,7 @@ function App(){
         setSyncStatus("synced");
         if(snap.exists){
           const d=snap.data();
-          const r = {
-            checked: d.checked||{},
-            notes: d.notes||{},
-            custom: d.custom||{},
-            overrides: d.overrides||{},
-            deleted: d.deleted||{},
-            assignedE: d.assignedE||{},
-            assignedC: d.assignedC||{},
-          };
+          const r={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{},overrides:d.overrides||{},deleted:d.deleted||{},assignedE:d.assignedE||{},assignedC:d.assignedC||{}};
           remoteRef.current=r;
           setChecked(r.checked);setNotes(r.notes);setCustom(r.custom);
           setOverrides(r.overrides);setDeleted(r.deleted);
@@ -219,6 +285,50 @@ function App(){
     return ()=>clearTimeout(t);
   },[checked,notes,custom,overrides,deleted,assignedE,assignedC,syncCode,syncStatus]);
 
+  /* Reminders subscription */
+  useEffect(()=>{
+    if(!syncCode){setReminders({});return;}
+    const unsub = db.collection("reminders")
+      .where("syncCode","==",syncCode)
+      .where("sent","==",false)
+      .onSnapshot(snap=>{
+        const r={};
+        snap.forEach(doc=>{
+          const d=doc.data();
+          r[d.taskKey]={id:doc.id, ...d};
+        });
+        setReminders(r);
+      }, err=>console.error("Reminders sub error:",err));
+    return unsub;
+  },[syncCode]);
+
+  /* Refresh device lastSeen */
+  useEffect(()=>{
+    if(device.token && syncCode){
+      db.collection("devices").doc(device.token).set({
+        person: device.person,
+        syncCode,
+        lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
+        userAgent: navigator.userAgent
+      }, {merge:true}).catch(()=>{});
+    }
+  },[device.token, syncCode]); // eslint-disable-line
+
+  /* Foreground message handler */
+  useEffect(()=>{
+    if(!device.token) return;
+    const m = getMessaging();
+    if(!m) return;
+    try{
+      const unsub = m.onMessage(payload=>{
+        const title=(payload.notification&&payload.notification.title) || (payload.data&&payload.data.title) || "Reminder";
+        const body =(payload.notification&&payload.notification.body)  || (payload.data&&payload.data.body)  || "";
+        showToast(`🔔 ${title}${body?" — "+body:""}`);
+      });
+      return unsub;
+    }catch(e){console.warn(e);}
+  },[device.token]);
+
   /* Actions */
   const toggle=k=>setChecked(p=>({...p,[k]:!p[k]}));
   const saveNote=(day,text)=>setNotes(p=>({...p,[day]:text}));
@@ -230,41 +340,79 @@ function App(){
       return{...p,[day]:[...list,{id,text:trimmed}]};
     });
   };
-  const editTask = (task, newText) => {
-    const t=(newText||"").trim();
-    if(!t) return;
-    if(task.builtin){
-      setOverrides(p=>({...p,[task.key]:t}));
-    } else {
-      setCustom(p=>{
-        const list=(p[task.dayNum||menuTask?.dayObj.day]||[]).map(x=>x.id===task.customId?{...x,text:t}:x);
-        const dayNum=task.dayNum||menuTask?.dayObj.day;
-        return {...p,[dayNum]:list};
-      });
-    }
+  const editTask=(task,newText,dayNum)=>{
+    const t=(newText||"").trim();if(!t) return;
+    if(task.builtin){setOverrides(p=>({...p,[task.key]:t}));}
+    else{setCustom(p=>{const list=(p[dayNum]||[]).map(x=>x.id===task.customId?{...x,text:t}:x);return {...p,[dayNum]:list};});}
   };
-  const deleteTask = (task, dayNum) => {
-    if(task.builtin){
-      setDeleted(p=>({...p,[task.key]:true}));
-    } else {
-      setCustom(p=>({...p,[dayNum]:(p[dayNum]||[]).filter(t=>t.id!==task.customId)}));
-      setChecked(p=>{const n={...p};delete n[task.key];return n;});
-    }
-    // Clean assignments
+  const deleteTask=(task, dayNum)=>{
+    if(task.builtin){setDeleted(p=>({...p,[task.key]:true}));}
+    else{setCustom(p=>({...p,[dayNum]:(p[dayNum]||[]).filter(t=>t.id!==task.customId)}));setChecked(p=>{const n={...p};delete n[task.key];return n;});}
     setAssignedE(p=>{const n={...p};delete n[task.key];return n;});
     setAssignedC(p=>{const n={...p};delete n[task.key];return n;});
+    // Also remove any reminder
+    const rem=reminders[task.key];
+    if(rem) db.collection("reminders").doc(rem.id).delete().catch(()=>{});
   };
-  const restoreDeletedForDay = (dayNum) => {
-    setDeleted(p=>{
-      const n={...p};
-      Object.keys(n).forEach(k=>{if(k.startsWith(`${dayNum}-`)) delete n[k];});
-      return n;
-    });
+  const restoreDeletedForDay=dayNum=>{
+    setDeleted(p=>{const n={...p};Object.keys(n).forEach(k=>{if(k.startsWith(`${dayNum}-`)) delete n[k];});return n;});
   };
   const toggleAssignE=k=>setAssignedE(p=>{const n={...p};if(n[k])delete n[k];else n[k]=true;return n;});
   const toggleAssignC=k=>setAssignedC(p=>{const n={...p};if(n[k])delete n[k];else n[k]=true;return n;});
 
-  /* Sync */
+  /* Reminder actions */
+  const openReminderPicker=(taskObj, dayObj)=>{
+    if(!syncCode){alert("Enable Sync first (bottom of main screen) so reminders work across devices.");return;}
+    if(!device.person || !device.token){
+      setPendingReminder({taskObj, dayObj});
+      setShowDeviceSetup(true);
+      return;
+    }
+    setPickerTask({taskObj, dayObj});
+  };
+  const completeDeviceSetup=async(person)=>{
+    setPushBusy(true);
+    try{
+      const token=await setupPushForDevice(person, syncCode);
+      setDevice({person, token});
+      setShowDeviceSetup(false);
+      showToast("Notifications enabled");
+      if(pendingReminder){setPickerTask(pendingReminder);setPendingReminder(null);}
+    }catch(err){
+      alert("Couldn't enable notifications: "+(err.message||err));
+    }finally{setPushBusy(false);}
+  };
+  const saveReminder=async(triggerAtDate)=>{
+    if(!pickerTask || !triggerAtDate) return;
+    const {taskObj, dayObj}=pickerTask;
+    const existing=reminders[taskObj.key];
+    const data={
+      syncCode,
+      taskKey: taskObj.key,
+      dayNum: dayObj.day,
+      taskText: taskObj.text,
+      dayTitle: dayObj.title,
+      triggerAt: firebase.firestore.Timestamp.fromDate(triggerAtDate),
+      assignedE: !!assignedE[taskObj.key],
+      assignedC: !!assignedC[taskObj.key],
+      sent: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdByDevice: device.token||"",
+      createdByPerson: device.person||""
+    };
+    try{
+      if(existing){await db.collection("reminders").doc(existing.id).update(data);}
+      else{await db.collection("reminders").add(data);}
+      setPickerTask(null);
+      showToast("Reminder set");
+    }catch(err){console.error(err);alert("Couldn't save reminder.");}
+  };
+  const removeReminder=async(taskKey)=>{
+    const r=reminders[taskKey]; if(!r) return;
+    try{await db.collection("reminders").doc(r.id).delete();showToast("Reminder removed");}catch(err){console.error(err);}
+  };
+
+  /* Sync activation */
   const activateSync = async (code) => {
     const c=(code||"").trim();
     if(c.length<6){alert("Code must be at least 6 characters.");return;}
@@ -276,9 +424,7 @@ function App(){
         const d=snap.data();
         const remoteHas = Object.keys(d.checked||{}).length+Object.keys(d.notes||{}).length+Object.keys(d.custom||{}).length+Object.keys(d.overrides||{}).length+Object.keys(d.deleted||{}).length>0;
         if(remoteHas && hasLocal){
-          if(!confirm("This code has existing data. Replace your local progress with the synced data?")){
-            setSyncStatus(syncCode?"synced":"local");return;
-          }
+          if(!confirm("This code has existing data. Replace your local progress with the synced data?")){setSyncStatus(syncCode?"synced":"local");return;}
         }
         if(remoteHas){
           setChecked(d.checked||{});setNotes(d.notes||{});setCustom(d.custom||{});
@@ -302,6 +448,10 @@ function App(){
     try{localStorage.removeItem("lf_sync_code")}catch{};
     setSyncCode(null);setSyncStatus("local");setSyncOpen(false);showToast("Sync disabled");
   };
+  const changeDeviceIdentity = ()=>{
+    setShowDeviceSetup(true);
+    setSyncOpen(false);
+  };
 
   const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2200);};
 
@@ -310,23 +460,8 @@ function App(){
   const pct=totals.total?Math.round(totals.done/totals.total*100):0;
   const W=WEEKS[week];
   const weekDays=DAYS.filter(d=>d.week===week);
-
-  // Counts for week buttons (E and C)
-  const allTaskKeys = (filterFn) => {
-    const keys=[];
-    DAYS.forEach(d=>{
-      if(filterFn && !filterFn(d)) return;
-      const tasks=effectiveTasks(d,overrides,deleted,custom);
-      tasks.forEach(t=>keys.push(t.key));
-    });
-    return keys;
-  };
-  const weekECount = weekDays.reduce((a,d)=>{
-    return a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedE[t.key]).length;
-  },0);
-  const weekCCount = weekDays.reduce((a,d)=>{
-    return a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedC[t.key]).length;
-  },0);
+  const weekECount = weekDays.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedE[t.key]).length,0);
+  const weekCCount = weekDays.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedC[t.key]).length,0);
 
   const s={
     wrap:{fontFamily:"-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif",background:"#F2F2F7",minHeight:"100vh",maxWidth:430,margin:"0 auto",paddingBottom:80},
@@ -336,7 +471,7 @@ function App(){
 
   return(
     <div style={s.wrap}>
-      {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1C1C1E",color:"#fff",fontSize:13,fontWeight:500,padding:"9px 18px",borderRadius:99,zIndex:1100,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap"}}>{toast}</div>}
+      {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1C1C1E",color:"#fff",fontSize:13,fontWeight:500,padding:"9px 18px",borderRadius:99,zIndex:1100,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap",maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis"}}>{toast}</div>}
       <div style={s.hdr}>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
           <div>
@@ -359,13 +494,14 @@ function App(){
               checked={checked} custom={custom[activeDay.day]||[]}
               overrides={overrides} deleted={deleted}
               assignedE={assignedE} assignedC={assignedC}
+              reminders={reminders}
               note={notes[activeDay.day]||""}
               editingKey={editingKey}
               onToggle={toggle}
               onLongPress={(taskObj)=>setMenuTask({dayObj:activeDay, taskObj})}
               onAddCustom={text=>addCustomTask(activeDay.day,text)}
               onNoteChange={text=>saveNote(activeDay.day,text)}
-              onEditSave={(taskObj,text)=>{editTask({...taskObj,dayNum:activeDay.day},text);setEditingKey(null);}}
+              onEditSave={(taskObj,text)=>{editTask(taskObj,text,activeDay.day);setEditingKey(null);}}
               onEditCancel={()=>setEditingKey(null)}
               onRestoreDeleted={()=>restoreDeletedForDay(activeDay.day)}
               onBack={()=>setActiveDay(null)}/>
@@ -389,7 +525,6 @@ function App(){
               })}
             </div>
 
-            {/* E / C buttons */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
               <PersonButton person="e" count={weekECount} onClick={()=>setPersonView("e")}/>
               <PersonButton person="c" count={weekCCount} onClick={()=>setPersonView("c")}/>
@@ -401,6 +536,7 @@ function App(){
                 const c=dayCounts(d,checked,overrides,deleted,custom);
                 const dn=c.total>0&&c.done===c.total;
                 const hasNote=(notes[d.day]||"").trim().length>0;
+                const dayReminderCount = c.tasks.filter(t=>reminders[t.key]).length;
                 return(
                   <div key={d.day}>
                     {idx>0&&<div style={{height:1,background:"#F2F2F7",marginLeft:60}}/>}
@@ -409,7 +545,7 @@ function App(){
                         <span style={{fontSize:13,fontWeight:700,color:dn?"#fff":cc}}>{dn?"✓":d.day}</span>
                       </div>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:15,fontWeight:600,color:dn?"#8E8E93":"#1C1C1E",marginBottom:3,textDecoration:dn?"line-through":"none"}}>{d.title}{hasNote&&<span style={{marginLeft:6,fontSize:12}} title="Has notes">📝</span>}</div>
+                        <div style={{fontSize:15,fontWeight:600,color:dn?"#8E8E93":"#1C1C1E",marginBottom:3,textDecoration:dn?"line-through":"none"}}>{d.title}{hasNote&&<span style={{marginLeft:6,fontSize:12}} title="Has notes">📝</span>}{dayReminderCount>0&&<span style={{marginLeft:6,fontSize:12}} title="Has reminders">🔔</span>}</div>
                         <div style={{display:"flex",alignItems:"center",gap:8}}>
                           <span style={{fontSize:11,fontWeight:600,color:cc,background:`${cc}15`,padding:"2px 7px",borderRadius:99}}>{d.cat}</span>
                           <span style={{fontSize:11,color:"#8E8E93"}}>{c.done}/{c.total}</span>
@@ -435,7 +571,12 @@ function App(){
                 </div>
               ))}
             </div>
-            <SyncBar status={syncStatus} code={syncCode} accent={W.accent} onClick={()=>setSyncOpen(true)}/>
+            <FooterBar
+              syncStatus={syncStatus} syncCode={syncCode}
+              device={device}
+              accent={W.accent}
+              onSyncClick={()=>setSyncOpen(true)}
+              onDeviceClick={()=>setShowDeviceSetup(true)}/>
           </>
         }
       </div>
@@ -445,9 +586,12 @@ function App(){
         dayObj={menuTask.dayObj}
         assignedE={assignedE[menuTask.taskObj.key]}
         assignedC={assignedC[menuTask.taskObj.key]}
+        reminder={reminders[menuTask.taskObj.key]}
         onEdit={()=>{setEditingKey(menuTask.taskObj.key);setMenuTask(null);}}
         onAssignE={()=>{toggleAssignE(menuTask.taskObj.key);setMenuTask(null);}}
         onAssignC={()=>{toggleAssignC(menuTask.taskObj.key);setMenuTask(null);}}
+        onSetReminder={()=>{openReminderPicker(menuTask.taskObj, menuTask.dayObj);setMenuTask(null);}}
+        onRemoveReminder={()=>{removeReminder(menuTask.taskObj.key);setMenuTask(null);}}
         onDelete={()=>{
           if(confirm(`Delete "${menuTask.taskObj.text}"?`)){
             deleteTask(menuTask.taskObj, menuTask.dayObj.day);
@@ -456,15 +600,28 @@ function App(){
         }}
         onClose={()=>setMenuTask(null)}/>}
 
+      {pickerTask&&<ReminderPickerSheet
+        task={pickerTask.taskObj}
+        dayObj={pickerTask.dayObj}
+        existing={reminders[pickerTask.taskObj.key]}
+        onSave={saveReminder}
+        onRemove={()=>{removeReminder(pickerTask.taskObj.key);setPickerTask(null);}}
+        onClose={()=>setPickerTask(null)}/>}
+
+      {showDeviceSetup&&<DeviceSetupSheet
+        currentPerson={device.person}
+        hasToken={!!device.token}
+        busy={pushBusy}
+        onPick={completeDeviceSetup}
+        onClose={()=>{setShowDeviceSetup(false);setPendingReminder(null);}}/>}
+
       {personView&&<PersonTasksSheet
         person={personView}
         currentWeek={week}
-        checked={checked}
-        custom={custom}
-        overrides={overrides}
-        deleted={deleted}
-        assignedE={assignedE}
-        assignedC={assignedC}
+        checked={checked} custom={custom}
+        overrides={overrides} deleted={deleted}
+        assignedE={assignedE} assignedC={assignedC}
+        reminders={reminders}
         onToggle={toggle}
         onOpenDay={(d)=>{setPersonView(null);setActiveDay(d);}}
         onClose={()=>setPersonView(null)}/>}
@@ -493,12 +650,11 @@ function PersonButton({person, count, onClick}){
 }
 
 /* ---------- Person tasks sheet ---------- */
-function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,assignedE,assignedC,onToggle,onOpenDay,onClose}){
+function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,assignedE,assignedC,reminders,onToggle,onOpenDay,onClose}){
   const t = personTheme(person);
-  const [scope, setScope] = useState("week"); // "week" | "all"
+  const [scope, setScope] = useState("week");
   const days = DAYS.filter(d => scope==="all" ? true : d.week===currentWeek);
   const assignedMap = person==="e" ? assignedE : assignedC;
-  // Group: for each day, get tasks assigned to person
   const grouped = days.map(d=>{
     const tasks = effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedMap[t.key]);
     return {day:d, tasks};
@@ -545,12 +701,14 @@ function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,a
                     </button>
                     {g.tasks.map((task,i)=>{
                       const isDone = checked[task.key];
+                      const rem = reminders[task.key];
                       return (
                         <div key={task.key} onClick={()=>onToggle(task.key)} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",cursor:"pointer",background:isDone?`${cc}08`:"transparent",borderBottom:i<g.tasks.length-1?"1px solid #F2F2F7":"none"}}>
                           <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
                             {isDone&&<span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
                           </div>
                           <span style={{fontSize:14,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.4,textDecoration:isDone?"line-through":"none",flex:1}}>{task.text}</span>
+                          {rem&&<span style={{fontSize:11,color:"#8E8E93",flexShrink:0}}>🔔 {formatRel(rem.triggerAt.toDate())}</span>}
                         </div>
                       );
                     })}
@@ -565,7 +723,7 @@ function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,a
 }
 
 /* ---------- Long-press action sheet ---------- */
-function TaskActionSheet({task,dayObj,assignedE,assignedC,onEdit,onAssignE,onAssignC,onDelete,onClose}){
+function TaskActionSheet({task,dayObj,assignedE,assignedC,reminder,onEdit,onAssignE,onAssignC,onSetReminder,onRemoveReminder,onDelete,onClose}){
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"14px 0 env(safe-area-inset-bottom,16px)"}}>
@@ -573,10 +731,13 @@ function TaskActionSheet({task,dayObj,assignedE,assignedC,onEdit,onAssignE,onAss
         <div style={{padding:"0 20px 12px",borderBottom:"1px solid #F2F2F7"}}>
           <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:4}}>Day {dayObj.day} · {dayObj.title}</div>
           <div style={{fontSize:14,color:"#1C1C1E",lineHeight:1.4}}>{task.text}</div>
+          {reminder&&<div style={{fontSize:12,color:"#8E8E93",marginTop:6}}>🔔 Reminder: {formatRel(reminder.triggerAt.toDate())}</div>}
         </div>
         <MenuRow icon="✏️" label="Edit task" onClick={onEdit}/>
         <MenuRow icon={<PersonDot p="e"/>} label={assignedE?"Unassign Edward":"Assign to Edward"} onClick={onAssignE}/>
         <MenuRow icon={<PersonDot p="c"/>} label={assignedC?"Unassign Clarissa":"Assign to Clarissa"} onClick={onAssignC}/>
+        <MenuRow icon="🔔" label={reminder?"Change reminder":"Set reminder"} onClick={onSetReminder}/>
+        {reminder&&<MenuRow icon="🔕" label="Remove reminder" onClick={onRemoveReminder}/>}
         <MenuRow icon="🗑️" label={task.builtin?"Delete (can restore later)":"Delete task"} onClick={onDelete} destructive/>
         <div style={{padding:"10px 16px 0"}}>
           <button onClick={onClose} style={{width:"100%",background:"#F2F2F7",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:600,color:"#1C1C1E",cursor:"pointer"}}>Cancel</button>
@@ -598,18 +759,94 @@ function PersonDot({p}){
   return <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,height:20,borderRadius:"50%",background:t.solid,color:"#fff",fontSize:11,fontWeight:700}}>{t.initial}</span>;
 }
 
+/* ---------- Reminder picker ---------- */
+function ReminderPickerSheet({task,dayObj,existing,onSave,onRemove,onClose}){
+  const initial = existing ? existing.triggerAt.toDate() : new Date(Date.now()+60*60*1000);
+  const [val, setVal] = useState(toLocalDTInput(initial));
+  const presets = presetTimes();
+  const save = ()=>{
+    const d = new Date(val);
+    if(isNaN(d.getTime())){alert("Pick a valid date and time.");return;}
+    if(d.getTime() < Date.now() - 60*1000){
+      if(!confirm("This time is in the past. Save anyway?")) return;
+    }
+    onSave(d);
+  };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1050,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"16px 20px env(safe-area-inset-bottom,16px)",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px"}}/>
+        <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",marginBottom:4}}>{existing?"Change reminder":"Set reminder"}</div>
+        <div style={{fontSize:13,color:"#8E8E93",marginBottom:14,lineHeight:1.4}}>Day {dayObj.day} · {task.text}</div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:8}}>Quick</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+          {presets.map((p,i)=>(
+            <button key={i} onClick={()=>setVal(toLocalDTInput(p.value))} style={{background:"#F2F2F7",border:"none",borderRadius:10,padding:"10px 12px",fontSize:13,fontWeight:600,color:"#1C1C1E",cursor:"pointer",textAlign:"left"}}>{p.label}</button>
+          ))}
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:8}}>Custom</div>
+        <input type="datetime-local" value={val} onChange={e=>setVal(e.target.value)} style={{width:"100%",border:"1px solid #E5E5EA",borderRadius:12,padding:"11px 14px",fontSize:15,background:"#FAFAFA",color:"#1C1C1E",marginBottom:14}}/>
+
+        <button onClick={save} style={{width:"100%",background:"#007AFF",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:600,cursor:"pointer",marginBottom:8}}>{existing?"Update reminder":"Set reminder"}</button>
+        {existing&&<button onClick={onRemove} style={{width:"100%",background:"#fff",color:"#FF3B30",border:"1px solid #FFD7D5",borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer",marginBottom:8}}>Remove reminder</button>}
+        <button onClick={onClose} style={{width:"100%",background:"none",color:"#8E8E93",border:"none",padding:"10px",fontSize:14,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Device setup ---------- */
+function DeviceSetupSheet({currentPerson, hasToken, busy, onPick, onClose}){
+  const isChanging = hasToken && !!currentPerson;
+  return (
+    <div onClick={busy?undefined:onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1050,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"16px 20px env(safe-area-inset-bottom,16px)"}}>
+        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 14px"}}/>
+        <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>{isChanging?"Change device identity":"Enable notifications"}</div>
+        <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>{isChanging?"Tell the app who's using this device so the right person gets pinged for assigned tasks.":"To get reminder pings on this device, tell us who's using it. We'll only send notifications for tasks assigned to that person (or to both)."}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          {["e","c"].map(p=>{
+            const t = personTheme(p);
+            const active = currentPerson===p;
+            return (
+              <button key={p} disabled={busy} onClick={()=>onPick(p)} style={{background:active?t.solid:t.bg,color:active?"#fff":t.text,border:`1px solid ${active?t.solid:t.border}`,borderRadius:14,padding:"16px 12px",fontSize:14,fontWeight:600,cursor:busy?"default":"pointer",opacity:busy?0.6:1,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+                <div style={{width:34,height:34,borderRadius:"50%",background:active?"rgba(255,255,255,0.25)":t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700}}>{t.initial}</div>
+                <span>{t.name}'s device</span>
+                {active&&<span style={{fontSize:10,opacity:0.85}}>Currently set</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{fontSize:11,color:"#8E8E93",lineHeight:1.5,marginBottom:14}}>{busy?"Setting up… your browser may prompt for notification permission.":"Your browser will prompt for permission. Choose Allow."}</div>
+        <button onClick={onClose} disabled={busy} style={{width:"100%",background:"#F2F2F7",color:"#1C1C1E",border:"none",borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>{busy?"Working…":"Cancel"}</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Sync ---------- */
-function SyncBar({status,code,accent,onClick}){
-  let icon="📱",label="Local only",action="Enable sync";
-  if(status==="connecting"){icon="☁️";label="Connecting…";action="";}
-  else if(status==="synced"){icon="☁️";label="Synced";action="Manage";}
-  else if(status==="error"){icon="⚠️";label="Sync error";action="Retry";}
-  return(
-    <button onClick={onClick} style={{width:"100%",background:"transparent",border:"none",padding:"6px 8px 18px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-      <span style={{fontSize:13,flexShrink:0,opacity:0.7}}>{icon}</span>
-      <span style={{fontSize:12,fontWeight:500,color:"#8E8E93"}}>{label}</span>
-      {action&&<span style={{fontSize:12,color:accent,fontWeight:600}}>· {action}</span>}
-    </button>
+function FooterBar({syncStatus,syncCode,device,accent,onSyncClick,onDeviceClick}){
+  let syncIcon="📱",syncLabel="Local only",syncAction="Enable sync";
+  if(syncStatus==="connecting"){syncIcon="☁️";syncLabel="Connecting…";syncAction="";}
+  else if(syncStatus==="synced"){syncIcon="☁️";syncLabel="Synced";syncAction="Manage";}
+  else if(syncStatus==="error"){syncIcon="⚠️";syncLabel="Sync error";syncAction="Retry";}
+
+  const t = device.person ? personTheme(device.person) : null;
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"6px 8px 18px"}}>
+      <button onClick={onSyncClick} style={{background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:8,padding:"4px 8px"}}>
+        <span style={{fontSize:13,opacity:0.7}}>{syncIcon}</span>
+        <span style={{fontSize:12,fontWeight:500,color:"#8E8E93"}}>{syncLabel}</span>
+        {syncAction&&<span style={{fontSize:12,color:accent,fontWeight:600}}>· {syncAction}</span>}
+      </button>
+      <button onClick={onDeviceClick} style={{background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:8,padding:"2px 8px"}}>
+        <span style={{fontSize:13,opacity:0.7}}>{device.token?"🔔":"🔕"}</span>
+        <span style={{fontSize:12,fontWeight:500,color:"#8E8E93"}}>{device.token?`Notifications on (${t.name}'s device)`:"Notifications off"}</span>
+        <span style={{fontSize:12,color:accent,fontWeight:600}}>· {device.token?"Change":"Enable"}</span>
+      </button>
+    </div>
   );
 }
 function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,showToast}){
@@ -648,7 +885,7 @@ function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,sh
 }
 
 /* ---------- TaskRow with long-press ---------- */
-function TaskRow({task, dayNum, isDone, isEditing, assignedE, assignedC, cc, onToggle, onLongPress, onEditSave, onEditCancel}){
+function TaskRow({task, dayNum, isDone, isEditing, assignedE, assignedC, reminder, cc, onToggle, onLongPress, onEditSave, onEditCancel}){
   const [editText, setEditText] = useState(task.text);
   useEffect(()=>{setEditText(task.text);},[task.text,isEditing]);
   const pressRef = useRef({timer:null,triggered:false,startX:0,startY:0});
@@ -696,7 +933,10 @@ function TaskRow({task, dayNum, isDone, isEditing, assignedE, assignedC, cc, onT
       <div style={{width:26,height:26,borderRadius:"50%",flexShrink:0,border:`2px solid ${isDone?cc:"#D1D1D6"}`,background:isDone?cc:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
         {isDone&&<span style={{color:"#fff",fontSize:13,lineHeight:1,fontWeight:700}}>✓</span>}
       </div>
-      <span style={{fontSize:15,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.45,textDecoration:isDone?"line-through":"none",flex:1,minWidth:0,wordBreak:"break-word"}}>{task.text}</span>
+      <div style={{flex:1,minWidth:0}}>
+        <span style={{fontSize:15,color:isDone?"#8E8E93":"#1C1C1E",lineHeight:1.45,textDecoration:isDone?"line-through":"none",wordBreak:"break-word",display:"block"}}>{task.text}</span>
+        {reminder&&<div style={{fontSize:11,color:"#8E8E93",marginTop:3}}>🔔 {formatRel(reminder.triggerAt.toDate())}</div>}
+      </div>
       <div style={{display:"flex",gap:3,flexShrink:0,marginLeft:4}}>
         {assignedE&&<PersonDot p="e"/>}
         {assignedC&&<PersonDot p="c"/>}
@@ -706,7 +946,7 @@ function TaskRow({task, dayNum, isDone, isEditing, assignedE, assignedC, cc, onT
 }
 
 /* ---------- DayDetail ---------- */
-function DayDetail({d,checked,custom,overrides,deleted,assignedE,assignedC,note,editingKey,onToggle,onLongPress,onAddCustom,onNoteChange,onEditSave,onEditCancel,onRestoreDeleted,onBack}){
+function DayDetail({d,checked,custom,overrides,deleted,assignedE,assignedC,reminders,note,editingKey,onToggle,onLongPress,onAddCustom,onNoteChange,onEditSave,onEditCancel,onRestoreDeleted,onBack}){
   const cc=CAT_COLOR[d.cat]||"#8E8E93";
   const [newTask,setNewTask]=useState("");
   const tasks = effectiveTasks(d, overrides, deleted, custom);
@@ -748,7 +988,7 @@ function DayDetail({d,checked,custom,overrides,deleted,assignedE,assignedC,note,
         <div style={{padding:"4px 0"}}>
           {tasks.filter(t=>t.builtin).map(t=>(
             <TaskRow key={t.key} task={t} dayNum={d.day} isDone={checked[t.key]} isEditing={editingKey===t.key}
-              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} cc={cc}
+              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} reminder={reminders[t.key]} cc={cc}
               onToggle={()=>onToggle(t.key)}
               onLongPress={()=>onLongPress(t)}
               onEditSave={text=>onEditSave(t,text)}
@@ -759,7 +999,7 @@ function DayDetail({d,checked,custom,overrides,deleted,assignedE,assignedC,note,
           )}
           {tasks.filter(t=>!t.builtin).map(t=>(
             <TaskRow key={t.key} task={t} dayNum={d.day} isDone={checked[t.key]} isEditing={editingKey===t.key}
-              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} cc={cc}
+              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} reminder={reminders[t.key]} cc={cc}
               onToggle={()=>onToggle(t.key)}
               onLongPress={()=>onLongPress(t)}
               onEditSave={text=>onEditSave(t,text)}
