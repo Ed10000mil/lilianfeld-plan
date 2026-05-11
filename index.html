@@ -205,6 +205,36 @@ function App(){
     try{const dev=localStorage.getItem("lf_device_v1");if(dev)setDevice(JSON.parse(dev))}catch{};
   },[]);
 
+  /* Deep-linking from notifications: open task page on load + on SW messages */
+  useEffect(()=>{
+    const goToDay = (dayNum)=>{
+      const n = parseInt(dayNum,10);
+      if(!n) return;
+      const day = DAYS.find(d=>d.day===n);
+      if(day){setWeek(day.week);setActiveDay(day);}
+    };
+    // 1. URL params on cold open
+    try{
+      const params = new URLSearchParams(window.location.search);
+      const dayParam = params.get('day');
+      if(dayParam){
+        goToDay(dayParam);
+        // Strip params so refresh doesn't re-navigate
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }catch{};
+    // 2. Service worker post-message when app is already open
+    const handler = e=>{
+      if(e.data && e.data.type==='deep-link' && e.data.day){
+        goToDay(e.data.day);
+      }
+    };
+    if(navigator.serviceWorker){
+      navigator.serviceWorker.addEventListener('message', handler);
+      return ()=>navigator.serviceWorker.removeEventListener('message', handler);
+    }
+  },[]);
+
   /* Persist */
   useEffect(()=>{try{localStorage.setItem("lf_v1",JSON.stringify(checked))}catch{}},[checked]);
   useEffect(()=>{try{localStorage.setItem("lf_notes_v1",JSON.stringify(notes))}catch{}},[notes]);

@@ -34,7 +34,6 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
     return;
   }
 
-  // Find devices registered to the target person(s) under this sync code
   const devicesSnap = await db
     .collection('devices')
     .where('syncCode', '==', syncCode)
@@ -64,6 +63,9 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
     dayTitle ? ': ' + dayTitle : ''
   }`;
 
+  // Deep link → opens straight to the task's day detail view
+  const deepLink = `${APP_URL}?day=${encodeURIComponent(dayNum || '')}&task=${encodeURIComponent(taskKey || '')}`;
+
   const message = {
     notification: { title, body },
     data: {
@@ -71,6 +73,7 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
       body,
       taskKey: taskKey || '',
       dayNum: String(dayNum || ''),
+      link: deepLink,
     },
     webpush: {
       notification: {
@@ -80,7 +83,7 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
         renotify: true,
       },
       fcmOptions: {
-        link: APP_URL,
+        link: deepLink,
       },
     },
     tokens,
@@ -92,7 +95,6 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
       `Ping ${event.params.pingId}: delivered ${response.successCount}/${tokens.length}`
     );
 
-    // Clean up tokens that are no longer valid
     const stale = [];
     response.responses.forEach((r, i) => {
       if (!r.success && r.error) {
@@ -111,9 +113,7 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
     for (const t of stale) {
       try {
         await db.collection('devices').doc(t).delete();
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
     }
 
     await snap.ref.update({
