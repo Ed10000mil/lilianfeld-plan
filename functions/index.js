@@ -26,6 +26,7 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
     dayTitle,
     targetPersons,
     senderPerson,
+    isOther,
   } = ping;
 
   if (!syncCode || !Array.isArray(targetPersons) || targetPersons.length === 0) {
@@ -57,11 +58,15 @@ exports.sendPing = onDocumentCreated('pings/{pingId}', async (event) => {
       : senderPerson === 'c'
       ? 'Clarissa'
       : 'Someone';
+  const isOtherTask = !!isOther || (typeof taskKey === 'string' && taskKey.startsWith('other-'));
+
   const title = `${senderName} pinged you`;
-  const body = `${taskText || 'a task'} · Day ${dayNum || '?'}${
-    dayTitle ? ': ' + dayTitle : ''
-  }`;
-  const deepLink = `${APP_URL}?day=${encodeURIComponent(dayNum || '')}&task=${encodeURIComponent(taskKey || '')}`;
+  const body = isOtherTask
+    ? `${taskText || 'a task'} · ${dayTitle || 'Other Tasks'}`
+    : `${taskText || 'a task'} · Day ${dayNum || '?'}${dayTitle ? ': ' + dayTitle : ''}`;
+  const deepLink = isOtherTask
+    ? `${APP_URL}?other=1&task=${encodeURIComponent(taskKey || '')}`
+    : `${APP_URL}?day=${encodeURIComponent(dayNum || '')}&task=${encodeURIComponent(taskKey || '')}`;
 
   // DATA-ONLY message: no `notification` field, no `webpush.notification`.
   // The service worker's onBackgroundMessage will display the notification

@@ -39,13 +39,16 @@ self.addEventListener('notificationclick', event => {
   const taskKey = data.taskKey || '';
   const dayNum  = data.dayNum  || '';
   const link    = data.link    || self.registration.scope;
+  const isOther = (typeof taskKey === 'string' && taskKey.startsWith('other-')) || /[?&]other=1/.test(link);
 
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of allClients) {
       if (c.url.startsWith(self.registration.scope)) {
         await c.focus();
-        if (dayNum || taskKey) {
+        if (isOther) {
+          c.postMessage({ type: 'deep-link', other: 1, taskKey: taskKey || null });
+        } else if (dayNum || taskKey) {
           c.postMessage({
             type: 'deep-link',
             day: parseInt(dayNum, 10) || null,

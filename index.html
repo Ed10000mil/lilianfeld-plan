@@ -82,13 +82,14 @@ function newSyncCode(){
 const ASSIGN_E = {bg:"#DFF1FE", text:"#0277BD", border:"#90CAF9", solid:"#5AC8FA", name:"Edward", initial:"E"};
 const ASSIGN_C = {bg:"#FEE2E2", text:"#C62828", border:"#EF9A9A", solid:"#FF6B6B", name:"Clarissa", initial:"C"};
 const personTheme = (p) => p==="e" ? ASSIGN_E : ASSIGN_C;
+const OTHER_ACCENT = "#636366"; // iOS systemGray2, neutral
 
 /* ---------- Plan data ---------- */
 const WEEKS=[
-  {label:"Week 1",subtitle:"Fix the Foundation",  accent:"#FF9500",icon:"🔧"},
-  {label:"Week 2",subtitle:"Awareness & Feedback", accent:"#AF52DE",icon:"📣"},
-  {label:"Week 3",subtitle:"Push Distribution",    accent:"#30B950",icon:"🚀"},
-  {label:"Week 4",subtitle:"Build Momentum",       accent:"#FF3B30",icon:"🔥"},
+  {label:"Week 1",subtitle:"Fix the Foundation",  accent:"#FF9500"},
+  {label:"Week 2",subtitle:"Awareness & Feedback", accent:"#AF52DE"},
+  {label:"Week 3",subtitle:"Push Distribution",    accent:"#30B950"},
+  {label:"Week 4",subtitle:"Build Momentum",       accent:"#FF3B30"},
 ];
 const CAT_COLOR={
   "Website":"#007AFF","Content":"#FF9500","Social":"#FF2D55",
@@ -140,10 +141,20 @@ function effectiveTasks(d, overrides, deleted, custom){
   }));
   return [...built, ...cust];
 }
+function otherEffectiveTasks(otherTasks){
+  return (otherTasks||[]).map(t=>({
+    key: `other-c${t.id}`, text: t.text, builtin: false, customId: t.id
+  }));
+}
 function dayCounts(d, checked, overrides, deleted, custom){
   const tasks = effectiveTasks(d, overrides, deleted, custom);
   const done = tasks.filter(t=>checked[t.key]).length;
   return {done, total:tasks.length, tasks};
+}
+function otherCounts(otherTasks, checked){
+  const tasks = otherEffectiveTasks(otherTasks);
+  const done = tasks.filter(t=>checked[t.key]).length;
+  return {done, total: tasks.length, tasks};
 }
 function assignedPersons(taskKey, assignedE, assignedC){
   const r=[];
@@ -153,6 +164,9 @@ function assignedPersons(taskKey, assignedE, assignedC){
 }
 function namesFor(persons){
   return persons.map(p=>personTheme(p).name).join(" & ");
+}
+function isOtherKey(key){
+  return typeof key === "string" && key.startsWith("other-");
 }
 
 /* ---------- Send Icon ---------- */
@@ -169,9 +183,11 @@ function SendIcon({size=14,color="currentColor"}){
 function App(){
   const[week,setWeek]=useState(0);
   const[activeDay,setActiveDay]=useState(null);
+  const[activeOther,setActiveOther]=useState(false);
   const[checked,setChecked]=useState({});
   const[notes,setNotes]=useState({});
   const[custom,setCustom]=useState({});
+  const[otherTasks,setOtherTasks]=useState([]);
   const[overrides,setOverrides]=useState({});
   const[deleted,setDeleted]=useState({});
   const[assignedE,setAssignedE]=useState({});
@@ -185,7 +201,7 @@ function App(){
   const[syncCode,setSyncCode]=useState(null);
   const[syncStatus,setSyncStatus]=useState("local");
   const[syncOpen,setSyncOpen]=useState(false);
-  const remoteRef=useRef({checked:{},notes:{},custom:{},overrides:{},deleted:{},assignedE:{},assignedC:{}});
+  const remoteRef=useRef({checked:{},notes:{},custom:{},otherTasks:[],overrides:{},deleted:{},assignedE:{},assignedC:{}});
 
   // Push
   const[device,setDevice]=useState({person:null,token:null});
@@ -197,6 +213,7 @@ function App(){
     try{const s=localStorage.getItem("lf_v1");if(s)setChecked(JSON.parse(s))}catch{};
     try{const n=localStorage.getItem("lf_notes_v1");if(n)setNotes(JSON.parse(n))}catch{};
     try{const c=localStorage.getItem("lf_custom_v1");if(c)setCustom(JSON.parse(c))}catch{};
+    try{const ot=localStorage.getItem("lf_other_v1");if(ot)setOtherTasks(JSON.parse(ot))}catch{};
     try{const o=localStorage.getItem("lf_overrides_v1");if(o)setOverrides(JSON.parse(o))}catch{};
     try{const d=localStorage.getItem("lf_deleted_v1");if(d)setDeleted(JSON.parse(d))}catch{};
     try{const ae=localStorage.getItem("lf_assigne_v1");if(ae)setAssignedE(JSON.parse(ae))}catch{};
@@ -205,29 +222,25 @@ function App(){
     try{const dev=localStorage.getItem("lf_device_v1");if(dev)setDevice(JSON.parse(dev))}catch{};
   },[]);
 
-  /* Deep-linking from notifications: open task page on load + on SW messages */
+  /* Deep-linking from notifications */
   useEffect(()=>{
     const goToDay = (dayNum)=>{
-      const n = parseInt(dayNum,10);
-      if(!n) return;
+      const n = parseInt(dayNum,10); if(!n) return;
       const day = DAYS.find(d=>d.day===n);
-      if(day){setWeek(day.week);setActiveDay(day);}
+      if(day){setActiveOther(false);setWeek(day.week);setActiveDay(day);}
     };
-    // 1. URL params on cold open
+    const goToOther = ()=>{ setActiveDay(null); setActiveOther(true); };
     try{
       const params = new URLSearchParams(window.location.search);
+      const otherParam = params.get('other');
       const dayParam = params.get('day');
-      if(dayParam){
-        goToDay(dayParam);
-        // Strip params so refresh doesn't re-navigate
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
+      if(otherParam){ goToOther(); window.history.replaceState({}, document.title, window.location.pathname); }
+      else if(dayParam){ goToDay(dayParam); window.history.replaceState({}, document.title, window.location.pathname); }
     }catch{};
-    // 2. Service worker post-message when app is already open
     const handler = e=>{
-      if(e.data && e.data.type==='deep-link' && e.data.day){
-        goToDay(e.data.day);
-      }
+      if(!e.data || e.data.type!=='deep-link') return;
+      if(e.data.other) goToOther();
+      else if(e.data.day) goToDay(e.data.day);
     };
     if(navigator.serviceWorker){
       navigator.serviceWorker.addEventListener('message', handler);
@@ -239,6 +252,7 @@ function App(){
   useEffect(()=>{try{localStorage.setItem("lf_v1",JSON.stringify(checked))}catch{}},[checked]);
   useEffect(()=>{try{localStorage.setItem("lf_notes_v1",JSON.stringify(notes))}catch{}},[notes]);
   useEffect(()=>{try{localStorage.setItem("lf_custom_v1",JSON.stringify(custom))}catch{}},[custom]);
+  useEffect(()=>{try{localStorage.setItem("lf_other_v1",JSON.stringify(otherTasks))}catch{}},[otherTasks]);
   useEffect(()=>{try{localStorage.setItem("lf_overrides_v1",JSON.stringify(overrides))}catch{}},[overrides]);
   useEffect(()=>{try{localStorage.setItem("lf_deleted_v1",JSON.stringify(deleted))}catch{}},[deleted]);
   useEffect(()=>{try{localStorage.setItem("lf_assigne_v1",JSON.stringify(assignedE))}catch{}},[assignedE]);
@@ -254,17 +268,22 @@ function App(){
         setSyncStatus("synced");
         if(snap.exists){
           const d=snap.data();
-          const r={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{},overrides:d.overrides||{},deleted:d.deleted||{},assignedE:d.assignedE||{},assignedC:d.assignedC||{}};
+          const r={
+            checked:d.checked||{},notes:d.notes||{},custom:d.custom||{},
+            otherTasks:d.otherTasks||[],
+            overrides:d.overrides||{},deleted:d.deleted||{},
+            assignedE:d.assignedE||{},assignedC:d.assignedC||{}
+          };
           remoteRef.current=r;
-          setChecked(r.checked);setNotes(r.notes);setCustom(r.custom);
+          setChecked(r.checked);setNotes(r.notes);setCustom(r.custom);setOtherTasks(r.otherTasks);
           setOverrides(r.overrides);setDeleted(r.deleted);
           setAssignedE(r.assignedE);setAssignedC(r.assignedC);
         } else {
           db.collection("sync").doc(syncCode).set({
-            checked,notes,custom,overrides,deleted,assignedE,assignedC,
+            checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC,
             updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-            schemaVersion:2
-          }).then(()=>{remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};}).catch(()=>{});
+            schemaVersion:3
+          }).then(()=>{remoteRef.current={checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC};}).catch(()=>{});
         }
       },
       err=>{console.error("Firestore error:",err);setSyncStatus("error");}
@@ -279,6 +298,7 @@ function App(){
       JSON.stringify(checked)===JSON.stringify(r.checked) &&
       JSON.stringify(notes)===JSON.stringify(r.notes) &&
       JSON.stringify(custom)===JSON.stringify(r.custom) &&
+      JSON.stringify(otherTasks)===JSON.stringify(r.otherTasks) &&
       JSON.stringify(overrides)===JSON.stringify(r.overrides) &&
       JSON.stringify(deleted)===JSON.stringify(r.deleted) &&
       JSON.stringify(assignedE)===JSON.stringify(r.assignedE) &&
@@ -286,22 +306,21 @@ function App(){
     if(same) return;
     const t=setTimeout(()=>{
       db.collection("sync").doc(syncCode).set({
-        checked,notes,custom,overrides,deleted,assignedE,assignedC,
+        checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC,
         updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-        schemaVersion:2
+        schemaVersion:3
       }).then(()=>{
-        remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};
+        remoteRef.current={checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC};
       }).catch(err=>console.error("Sync write failed:",err));
     },600);
     return ()=>clearTimeout(t);
-  },[checked,notes,custom,overrides,deleted,assignedE,assignedC,syncCode,syncStatus]);
+  },[checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC,syncCode,syncStatus]);
 
   /* Refresh device lastSeen */
   useEffect(()=>{
     if(device.token && syncCode){
       db.collection("devices").doc(device.token).set({
-        person: device.person,
-        syncCode,
+        person: device.person, syncCode,
         lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
         userAgent: navigator.userAgent
       }, {merge:true}).catch(()=>{});
@@ -326,6 +345,7 @@ function App(){
   /* Actions */
   const toggle=k=>setChecked(p=>({...p,[k]:!p[k]}));
   const saveNote=(day,text)=>setNotes(p=>({...p,[day]:text}));
+
   const addCustomTask=(day,text)=>{
     const trimmed=(text||"").trim();if(!trimmed)return;
     setCustom(p=>{
@@ -334,14 +354,37 @@ function App(){
       return{...p,[day]:[...list,{id,text:trimmed}]};
     });
   };
+  const addOtherTask=(text)=>{
+    const trimmed=(text||"").trim();if(!trimmed)return;
+    setOtherTasks(p=>{
+      const id=Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+      return [...p,{id,text:trimmed}];
+    });
+  };
+
   const editTask=(task,newText,dayNum)=>{
     const t=(newText||"").trim();if(!t) return;
-    if(task.builtin){setOverrides(p=>({...p,[task.key]:t}));}
-    else{setCustom(p=>{const list=(p[dayNum]||[]).map(x=>x.id===task.customId?{...x,text:t}:x);return {...p,[dayNum]:list};});}
+    if(task.builtin){
+      setOverrides(p=>({...p,[task.key]:t}));
+    } else if(isOtherKey(task.key)){
+      setOtherTasks(p=>p.map(x=>x.id===task.customId?{...x,text:t}:x));
+    } else {
+      setCustom(p=>{
+        const list=(p[dayNum]||[]).map(x=>x.id===task.customId?{...x,text:t}:x);
+        return {...p,[dayNum]:list};
+      });
+    }
   };
   const deleteTask=(task, dayNum)=>{
-    if(task.builtin){setDeleted(p=>({...p,[task.key]:true}));}
-    else{setCustom(p=>({...p,[dayNum]:(p[dayNum]||[]).filter(t=>t.id!==task.customId)}));setChecked(p=>{const n={...p};delete n[task.key];return n;});}
+    if(task.builtin){
+      setDeleted(p=>({...p,[task.key]:true}));
+    } else if(isOtherKey(task.key)){
+      setOtherTasks(p=>p.filter(x=>x.id!==task.customId));
+      setChecked(p=>{const n={...p};delete n[task.key];return n;});
+    } else {
+      setCustom(p=>({...p,[dayNum]:(p[dayNum]||[]).filter(t=>t.id!==task.customId)}));
+      setChecked(p=>{const n={...p};delete n[task.key];return n;});
+    }
     setAssignedE(p=>{const n={...p};delete n[task.key];return n;});
     setAssignedC(p=>{const n={...p};delete n[task.key];return n;});
   };
@@ -351,34 +394,27 @@ function App(){
   const toggleAssignE=k=>setAssignedE(p=>{const n={...p};if(n[k])delete n[k];else n[k]=true;return n;});
   const toggleAssignC=k=>setAssignedC(p=>{const n={...p};if(n[k])delete n[k];else n[k]=true;return n;});
 
-  /* Ping action */
+  /* Ping */
   const sendPing = async (taskObj, dayObj) => {
-    if(!syncCode){
-      alert("Enable Sync first (bottom of main screen) so the other device can receive pings.");
-      return;
-    }
+    if(!syncCode){alert("Enable Sync first (bottom of main screen) so the other device can receive pings.");return;}
     const targets = assignedPersons(taskObj.key, assignedE, assignedC);
-    if(targets.length === 0){
-      alert("Assign this task to Edward or Clarissa first — then you can ping them.");
-      return;
-    }
+    if(targets.length === 0){alert("Assign this task to Edward or Clarissa first — then you can ping them.");return;}
+    const isOther = isOtherKey(taskObj.key);
     try{
       await db.collection("pings").add({
         syncCode,
         taskKey: taskObj.key,
-        dayNum: dayObj.day,
+        dayNum: isOther ? null : (dayObj?.day || null),
         taskText: taskObj.text,
-        dayTitle: dayObj.title,
+        dayTitle: isOther ? "Other Tasks" : (dayObj?.title || ""),
+        isOther: !!isOther,
         targetPersons: targets,
         senderPerson: device.person || "",
         senderDevice: device.token || "",
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       showToast(`📨 Pinged ${namesFor(targets)}`);
-    }catch(err){
-      console.error(err);
-      alert("Couldn't send ping. Check your connection.");
-    }
+    }catch(err){console.error(err);alert("Couldn't send ping. Check your connection.");}
   };
 
   /* Device setup */
@@ -389,9 +425,8 @@ function App(){
       setDevice({person, token});
       setShowDeviceSetup(false);
       showToast("Notifications enabled");
-    }catch(err){
-      alert("Couldn't enable notifications: "+(err.message||err));
-    }finally{setPushBusy(false);}
+    }catch(err){alert("Couldn't enable notifications: "+(err.message||err));}
+    finally{setPushBusy(false);}
   };
 
   /* Sync */
@@ -401,25 +436,26 @@ function App(){
     try{
       setSyncStatus("connecting");
       const snap = await db.collection("sync").doc(c).get();
-      const hasLocal = Object.keys(checked).length+Object.keys(notes).length+Object.keys(custom).length+Object.keys(overrides).length+Object.keys(deleted).length>0;
+      const hasLocal = Object.keys(checked).length+Object.keys(notes).length+Object.keys(custom).length+otherTasks.length+Object.keys(overrides).length+Object.keys(deleted).length>0;
       if(snap.exists){
         const d=snap.data();
-        const remoteHas = Object.keys(d.checked||{}).length+Object.keys(d.notes||{}).length+Object.keys(d.custom||{}).length+Object.keys(d.overrides||{}).length+Object.keys(d.deleted||{}).length>0;
+        const remoteHas = Object.keys(d.checked||{}).length+Object.keys(d.notes||{}).length+Object.keys(d.custom||{}).length+(d.otherTasks||[]).length+Object.keys(d.overrides||{}).length+Object.keys(d.deleted||{}).length>0;
         if(remoteHas && hasLocal){
           if(!confirm("This code has existing data. Replace your local progress with the synced data?")){setSyncStatus(syncCode?"synced":"local");return;}
         }
         if(remoteHas){
           setChecked(d.checked||{});setNotes(d.notes||{});setCustom(d.custom||{});
+          setOtherTasks(d.otherTasks||[]);
           setOverrides(d.overrides||{});setDeleted(d.deleted||{});
           setAssignedE(d.assignedE||{});setAssignedC(d.assignedC||{});
-          remoteRef.current={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{},overrides:d.overrides||{},deleted:d.deleted||{},assignedE:d.assignedE||{},assignedC:d.assignedC||{}};
+          remoteRef.current={checked:d.checked||{},notes:d.notes||{},custom:d.custom||{},otherTasks:d.otherTasks||[],overrides:d.overrides||{},deleted:d.deleted||{},assignedE:d.assignedE||{},assignedC:d.assignedC||{}};
         } else {
-          await db.collection("sync").doc(c).set({checked,notes,custom,overrides,deleted,assignedE,assignedC,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),schemaVersion:2});
-          remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};
+          await db.collection("sync").doc(c).set({checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),schemaVersion:3});
+          remoteRef.current={checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC};
         }
       } else {
-        await db.collection("sync").doc(c).set({checked,notes,custom,overrides,deleted,assignedE,assignedC,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),schemaVersion:2});
-        remoteRef.current={checked,notes,custom,overrides,deleted,assignedE,assignedC};
+        await db.collection("sync").doc(c).set({checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),schemaVersion:3});
+        remoteRef.current={checked,notes,custom,otherTasks,overrides,deleted,assignedE,assignedC};
       }
       try{localStorage.setItem("lf_sync_code",c)}catch{};
       setSyncCode(c);setSyncStatus("synced");setSyncOpen(false);showToast("Sync enabled");
@@ -433,13 +469,14 @@ function App(){
 
   const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2200);};
 
-  /* Counts */
+  /* Counts (plan only — Other Tasks excluded from overall %) */
   const totals=DAYS.reduce((a,d)=>{const c=dayCounts(d,checked,overrides,deleted,custom);return{done:a.done+c.done,total:a.total+c.total};},{done:0,total:0});
   const pct=totals.total?Math.round(totals.done/totals.total*100):0;
   const W=WEEKS[week];
   const weekDays=DAYS.filter(d=>d.week===week);
   const weekECount = weekDays.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedE[t.key]).length,0);
   const weekCCount = weekDays.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedC[t.key]).length,0);
+  const otherC = otherCounts(otherTasks, checked);
 
   const s={
     wrap:{fontFamily:"-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif",background:"#F2F2F7",minHeight:"100vh",maxWidth:430,margin:"0 auto",paddingBottom:80},
@@ -447,11 +484,10 @@ function App(){
     body:{padding:"16px 16px 0"},
   };
 
-  const taskCommonProps = {
-    checked, assignedE, assignedC,
-    onToggle: toggle,
-    onPing: sendPing
-  };
+  const headerTitle = activeDay
+    ? `Day ${activeDay.day}`
+    : (activeOther ? "Other Tasks" : "30-Day Plan");
+  const headerAccent = activeOther ? OTHER_ACCENT : W.accent;
 
   return(
     <div style={s.wrap}>
@@ -460,7 +496,7 @@ function App(){
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
           <div>
             <div style={{fontSize:11,fontWeight:600,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:2}}>Lilianfeld Candles</div>
-            <div style={{fontSize:22,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.5}}>{activeDay?`Day ${activeDay.day}`:"30-Day Plan"}</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.5}}>{headerTitle}</div>
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:26,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.5}}>{pct}<span style={{fontSize:14,color:"#8E8E93",fontWeight:500}}>%</span></div>
@@ -468,7 +504,7 @@ function App(){
           </div>
         </div>
         <div style={{marginTop:10,height:4,background:"#D1D1D6",borderRadius:99,overflow:"hidden"}}>
-          <div style={{height:"100%",width:`${pct}%`,background:W.accent,borderRadius:99,transition:"width 0.4s"}}/>
+          <div style={{height:"100%",width:`${pct}%`,background:headerAccent,borderRadius:99,transition:"width 0.4s"}}/>
         </div>
       </div>
       <div style={s.body}>
@@ -489,25 +525,52 @@ function App(){
               onEditCancel={()=>setEditingKey(null)}
               onRestoreDeleted={()=>restoreDeletedForDay(activeDay.day)}
               onBack={()=>setActiveDay(null)}/>
+          : activeOther
+          ? <OtherTasksDetail
+              tasks={otherEffectiveTasks(otherTasks)}
+              checked={checked}
+              assignedE={assignedE} assignedC={assignedC}
+              editingKey={editingKey}
+              onToggle={toggle}
+              onPing={sendPing}
+              onLongPress={(taskObj)=>setMenuTask({dayObj:null, taskObj, isOther:true})}
+              onAdd={addOtherTask}
+              onEditSave={(taskObj,text)=>{editTask(taskObj,text);setEditingKey(null);}}
+              onEditCancel={()=>setEditingKey(null)}
+              onBack={()=>setActiveOther(false)}/>
           : <>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
               {WEEKS.map((wk,i)=>{
                 const wDs=DAYS.filter(d=>d.week===i);
                 const tot=wDs.reduce((a,d)=>{const c=dayCounts(d,checked,overrides,deleted,custom);return{d:a.d+c.done,t:a.t+c.total};},{d:0,t:0});
                 const act=week===i;
                 return(
                   <button key={i} onClick={()=>setWeek(i)} style={{border:"none",borderRadius:16,padding:"14px 14px",cursor:"pointer",textAlign:"left",background:act?wk.accent:"#fff",boxShadow:act?`0 4px 16px ${wk.accent}50`:"0 1px 4px rgba(0,0,0,0.08)",transform:act?"scale(1.02)":"scale(1)",transition:"all 0.2s"}}>
-                    <div style={{fontSize:20,marginBottom:4}}>{wk.icon}</div>
                     <div style={{fontSize:11,fontWeight:700,color:act?"rgba(255,255,255,0.7)":"#8E8E93",textTransform:"uppercase",letterSpacing:0.4}}>{wk.label}</div>
-                    <div style={{fontSize:13,fontWeight:600,color:act?"#fff":"#1C1C1E",marginTop:2,lineHeight:1.3}}>{wk.subtitle}</div>
-                    <div style={{marginTop:8,height:3,background:act?"rgba(255,255,255,0.3)":"#E5E5EA",borderRadius:99,overflow:"hidden"}}>
+                    <div style={{fontSize:14,fontWeight:600,color:act?"#fff":"#1C1C1E",marginTop:3,lineHeight:1.3}}>{wk.subtitle}</div>
+                    <div style={{marginTop:10,height:3,background:act?"rgba(255,255,255,0.3)":"#E5E5EA",borderRadius:99,overflow:"hidden"}}>
                       <div style={{height:"100%",width:`${tot.t?Math.round(tot.d/tot.t*100):0}%`,background:act?"#fff":wk.accent,borderRadius:99}}/>
                     </div>
-                    <div style={{fontSize:11,color:act?"rgba(255,255,255,0.65)":"#8E8E93",marginTop:4}}>{tot.d}/{tot.t} tasks</div>
+                    <div style={{fontSize:11,color:act?"rgba(255,255,255,0.65)":"#8E8E93",marginTop:5}}>{tot.d}/{tot.t} tasks</div>
                   </button>
                 );
               })}
             </div>
+
+            {/* Other Tasks card */}
+            <button onClick={()=>setActiveOther(true)} style={{width:"100%",background:"#fff",border:"none",borderRadius:16,padding:"14px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.08)",textAlign:"left"}}>
+              <div style={{width:32,height:32,borderRadius:"50%",background:`${OTHER_ACCENT}18`,color:OTHER_ACCENT,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:14,fontWeight:700}}>+</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.4,textTransform:"uppercase",marginBottom:2}}>Other Tasks</div>
+                <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E"}}>{otherC.total===0?"Nothing yet — tap to add":`${otherC.done}/${otherC.total} done`}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                {otherC.total>0&&<div style={{width:48,height:4,background:"#F2F2F7",borderRadius:99,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${Math.round(otherC.done/otherC.total*100)}%`,background:OTHER_ACCENT,borderRadius:99}}/>
+                </div>}
+                <span style={{color:"#C7C7CC",fontSize:18}}>›</span>
+              </div>
+            </button>
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
               <PersonButton person="e" count={weekECount} onClick={()=>setPersonView("e")}/>
@@ -567,6 +630,7 @@ function App(){
       {menuTask&&<TaskActionSheet
         task={menuTask.taskObj}
         dayObj={menuTask.dayObj}
+        isOther={menuTask.isOther}
         assignedE={assignedE[menuTask.taskObj.key]}
         assignedC={assignedC[menuTask.taskObj.key]}
         onEdit={()=>{setEditingKey(menuTask.taskObj.key);setMenuTask(null);}}
@@ -574,8 +638,9 @@ function App(){
         onAssignC={()=>{toggleAssignC(menuTask.taskObj.key);setMenuTask(null);}}
         onPing={()=>{sendPing(menuTask.taskObj, menuTask.dayObj);setMenuTask(null);}}
         onDelete={()=>{
+          const dn = menuTask.dayObj ? menuTask.dayObj.day : null;
           if(confirm(`Delete "${menuTask.taskObj.text}"?`)){
-            deleteTask(menuTask.taskObj, menuTask.dayObj.day);
+            deleteTask(menuTask.taskObj, dn);
             setMenuTask(null);
           }
         }}
@@ -592,11 +657,13 @@ function App(){
         person={personView}
         currentWeek={week}
         checked={checked} custom={custom}
+        otherTasks={otherTasks}
         overrides={overrides} deleted={deleted}
         assignedE={assignedE} assignedC={assignedC}
         onToggle={toggle}
         onPing={sendPing}
         onOpenDay={(d)=>{setPersonView(null);setActiveDay(d);}}
+        onOpenOther={()=>{setPersonView(null);setActiveOther(true);}}
         onClose={()=>setPersonView(null)}/>}
 
       {syncOpen&&<SyncModal
@@ -636,17 +703,27 @@ function PersonButton({person, count, onClick}){
 }
 
 /* ---------- Person tasks sheet ---------- */
-function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,assignedE,assignedC,onToggle,onPing,onOpenDay,onClose}){
+function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,overrides,deleted,assignedE,assignedC,onToggle,onPing,onOpenDay,onOpenOther,onClose}){
   const t = personTheme(person);
   const [scope, setScope] = useState("week");
+  const [showCompletedOther, setShowCompletedOther] = useState(false);
   const days = DAYS.filter(d => scope==="all" ? true : d.week===currentWeek);
   const assignedMap = person==="e" ? assignedE : assignedC;
   const grouped = days.map(d=>{
     const tasks = effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedMap[t.key]);
     return {day:d, tasks};
   }).filter(g=>g.tasks.length>0);
-  const totalCount = grouped.reduce((a,g)=>a+g.tasks.length,0);
-  const doneCount = grouped.reduce((a,g)=>a+g.tasks.filter(t=>checked[t.key]).length,0);
+
+  // Other tasks assigned to this person — split active / completed
+  const otherAssigned = otherEffectiveTasks(otherTasks).filter(t=>assignedMap[t.key]);
+  const otherActive = otherAssigned.filter(t=>!checked[t.key]);
+  const otherCompleted = otherAssigned.filter(t=>checked[t.key]);
+
+  const dayTotalCount = grouped.reduce((a,g)=>a+g.tasks.length,0);
+  const dayDoneCount  = grouped.reduce((a,g)=>a+g.tasks.filter(t=>checked[t.key]).length,0);
+  const otherDoneCount = otherCompleted.length;
+  const totalCount = dayTotalCount + otherAssigned.length;
+  const doneCount = dayDoneCount + otherDoneCount;
 
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
@@ -657,7 +734,7 @@ function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,a
             <div style={{width:42,height:42,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,fontWeight:700,flexShrink:0}}>{t.initial}</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.3}}>{t.name}'s Tasks</div>
-              <div style={{fontSize:12,color:"#8E8E93",marginTop:1}}>{doneCount}/{totalCount} done · {grouped.length} {grouped.length===1?"day":"days"}</div>
+              <div style={{fontSize:12,color:"#8E8E93",marginTop:1}}>{doneCount}/{totalCount} done</div>
             </div>
             <button onClick={onClose} style={{background:"#E5E5EA",border:"none",borderRadius:"50%",width:30,height:30,fontSize:16,color:"#8E8E93",cursor:"pointer",flexShrink:0,fontWeight:600,lineHeight:1}}>×</button>
           </div>
@@ -668,12 +745,13 @@ function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,a
           </div>
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"4px 16px 24px"}}>
-          {grouped.length===0
+          {grouped.length===0 && otherAssigned.length===0
             ? <div style={{padding:"30px 20px",textAlign:"center",color:"#8E8E93",fontSize:14}}>
-                No tasks assigned to {t.name} {scope==="week"?"this week":"yet"}.
+                No tasks assigned to {t.name} yet.
                 <div style={{fontSize:12,marginTop:8,lineHeight:1.5}}>Long-press any task to assign it.</div>
               </div>
-            : grouped.map(g=>{
+            : <>
+              {grouped.map(g=>{
                 const cc=CAT_COLOR[g.day.cat]||"#8E8E93";
                 return (
                   <div key={g.day.day} style={{background:"#fff",borderRadius:14,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
@@ -699,7 +777,47 @@ function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,a
                     })}
                   </div>
                 );
-              })
+              })}
+
+              {otherAssigned.length>0&&(
+                <div style={{background:"#fff",borderRadius:14,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+                  <button onClick={onOpenOther} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"transparent",border:"none",cursor:"pointer",width:"100%",borderBottom:"1px solid #F2F2F7",textAlign:"left"}}>
+                    <div style={{width:26,height:26,borderRadius:"50%",background:`${OTHER_ACCENT}18`,color:OTHER_ACCENT,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,flexShrink:0}}>+</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E"}}>Other Tasks</div>
+                      <div style={{fontSize:11,color:OTHER_ACCENT,fontWeight:600,marginTop:1}}>Not tied to a specific day</div>
+                    </div>
+                    <span style={{color:"#C7C7CC",fontSize:16}}>›</span>
+                  </button>
+                  {otherActive.length===0 && otherCompleted.length>0 && !showCompletedOther && (
+                    <div style={{padding:"14px",textAlign:"center",fontSize:13,fontWeight:600,color:OTHER_ACCENT}}>🎉 All caught up!</div>
+                  )}
+                  {otherActive.map((task,i)=>{
+                    const isLast = i === otherActive.length - 1 && (otherCompleted.length === 0 || !showCompletedOther);
+                    return (
+                      <div key={task.key} onClick={()=>onToggle(task.key)} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",cursor:"pointer",borderBottom:isLast?"none":"1px solid #F2F2F7"}}>
+                        <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,border:`2px solid #D1D1D6`,background:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}/>
+                        <span style={{fontSize:14,color:"#1C1C1E",lineHeight:1.4,flex:1}}>{task.text}</span>
+                        <PingButton assignedE={assignedE[task.key]} assignedC={assignedC[task.key]} onPing={()=>onPing(task,null)} size={26}/>
+                      </div>
+                    );
+                  })}
+                  {otherCompleted.length>0&&(
+                    <button onClick={()=>setShowCompletedOther(!showCompletedOther)} style={{width:"100%",background:"transparent",border:"none",borderTop:otherActive.length>0?"1px solid #F2F2F7":"none",padding:"10px 14px",textAlign:"left",color:OTHER_ACCENT,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                      {showCompletedOther ? "× Hide" : "↓ Show"} {otherCompleted.length} completed
+                    </button>
+                  )}
+                  {showCompletedOther && otherCompleted.map((task,i)=>(
+                    <div key={task.key} onClick={()=>onToggle(task.key)} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",cursor:"pointer",background:`${OTHER_ACCENT}08`,borderTop:"1px solid #F2F2F7"}}>
+                      <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,border:`2px solid ${OTHER_ACCENT}`,background:OTHER_ACCENT,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>
+                      </div>
+                      <span style={{fontSize:14,color:"#8E8E93",lineHeight:1.4,textDecoration:"line-through",flex:1}}>{task.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           }
         </div>
       </div>
@@ -708,17 +826,20 @@ function PersonTasksSheet({person,currentWeek,checked,custom,overrides,deleted,a
 }
 
 /* ---------- Long-press action sheet ---------- */
-function TaskActionSheet({task,dayObj,assignedE,assignedC,onEdit,onAssignE,onAssignC,onPing,onDelete,onClose}){
+function TaskActionSheet({task,dayObj,isOther,assignedE,assignedC,onEdit,onAssignE,onAssignC,onPing,onDelete,onClose}){
   const targets = [];
   if(assignedE) targets.push("e");
   if(assignedC) targets.push("c");
   const canPing = targets.length>0;
+  const eyebrow = isOther
+    ? `Other Tasks`
+    : `Day ${dayObj?.day || "?"} · ${dayObj?.title || ""}`;
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"14px 0 env(safe-area-inset-bottom,16px)"}}>
         <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px"}}/>
         <div style={{padding:"0 20px 12px",borderBottom:"1px solid #F2F2F7"}}>
-          <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:4}}>Day {dayObj.day} · {dayObj.title}</div>
+          <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:4}}>{eyebrow}</div>
           <div style={{fontSize:14,color:"#1C1C1E",lineHeight:1.4}}>{task.text}</div>
         </div>
         <MenuRow icon="✏️" label="Edit task" onClick={onEdit}/>
@@ -989,6 +1110,99 @@ function DayDetail({d,checked,custom,overrides,deleted,assignedE,assignedC,note,
         <textarea value={note} onChange={e=>onNoteChange(e.target.value)}
           placeholder="What happened today? Results, lessons, follow-ups…"
           style={{width:"100%",minHeight:120,border:"1px solid #E5E5EA",borderRadius:12,padding:"12px 14px",fontSize:15,lineHeight:1.5,color:"#1C1C1E",background:"#FAFAFA",resize:"vertical"}}/>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- OtherTasksDetail ---------- */
+function OtherTasksDetail({tasks,checked,assignedE,assignedC,editingKey,onToggle,onPing,onLongPress,onAdd,onEditSave,onEditCancel,onBack}){
+  const cc = OTHER_ACCENT;
+  const [newTask,setNewTask]=useState("");
+  const [showCompleted, setShowCompleted] = useState(false);
+
+  const activeTasks = tasks.filter(t=>!checked[t.key]);
+  const completedTasks = tasks.filter(t=>checked[t.key]);
+  const done = completedTasks.length;
+  const total = tasks.length;
+  const pct = total?Math.round(done/total*100):0;
+  const allDone = total>0 && done===total;
+  const submit=()=>{const t=newTask.trim();if(!t)return;onAdd(t);setNewTask("");};
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:cc,cursor:"pointer",fontSize:16,fontWeight:600,padding:0,display:"flex",alignItems:"center",gap:4}}>
+          <span style={{fontSize:22}}>‹</span> Back
+        </button>
+        <div style={{fontSize:11,color:"#8E8E93",fontWeight:500}}>Long-press for options · Tap ➤ to ping</div>
+      </div>
+      <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,0.08)",marginBottom:16}}>
+        <div style={{height:5,background:allDone?cc:`${cc}40`}}/>
+        <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #F2F2F7"}}>
+          <div style={{fontSize:11,fontWeight:600,color:"#8E8E93",textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>Section</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.4,lineHeight:1.2,marginBottom:10}}>Other Tasks</div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:12,color:"#8E8E93"}}>{done} of {total} {total===1?"task":"tasks"} done</span>
+            <span style={{fontSize:12,fontWeight:700,color:allDone?cc:"#8E8E93"}}>{total?pct:0}%{allDone?" ✓":""}</span>
+          </div>
+          <div style={{height:5,background:"#F2F2F7",borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${total?pct:0}%`,background:cc,borderRadius:99,transition:"width 0.3s"}}/>
+          </div>
+        </div>
+
+        <div style={{padding:"4px 0"}}>
+          {tasks.length===0&&(
+            <div style={{padding:"24px 20px",textAlign:"center",color:"#8E8E93",fontSize:13,lineHeight:1.5}}>No tasks yet. Add one below.</div>
+          )}
+          {tasks.length>0 && activeTasks.length===0 && (
+            <div style={{padding:"24px 20px",textAlign:"center",color:cc,fontSize:14,fontWeight:600,lineHeight:1.5}}>
+              🎉 All caught up!
+              <div style={{fontSize:12,fontWeight:500,color:"#8E8E93",marginTop:4}}>Add another task or tap below to see what's done.</div>
+            </div>
+          )}
+          {activeTasks.map(t=>(
+            <TaskRow key={t.key} task={t} dayNum={null} isDone={false} isEditing={editingKey===t.key}
+              assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} cc={cc}
+              onToggle={()=>onToggle(t.key)}
+              onPing={()=>onPing(t, null)}
+              onLongPress={()=>onLongPress(t)}
+              onEditSave={text=>onEditSave(t,text)}
+              onEditCancel={onEditCancel}/>
+          ))}
+
+          <div style={{display:"flex",gap:8,padding:"12px 16px 12px"}}>
+            <input type="text" value={newTask} onChange={e=>setNewTask(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter")submit();}}
+              placeholder="Add a task…"
+              style={{flex:1,border:"1px solid #E5E5EA",borderRadius:12,padding:"10px 14px",fontSize:15,background:"#fff",color:"#1C1C1E",minWidth:0}}/>
+            <button onClick={submit} disabled={!newTask.trim()} style={{background:newTask.trim()?cc:"#E5E5EA",color:"#fff",border:"none",borderRadius:12,padding:"0 16px",fontSize:14,fontWeight:600,cursor:newTask.trim()?"pointer":"default",flexShrink:0}}>Add</button>
+          </div>
+
+          {completedTasks.length>0 && (
+            <div style={{padding:"6px 20px 14px"}}>
+              <button onClick={()=>setShowCompleted(!showCompleted)}
+                style={{background:"none",border:"none",color:cc,fontSize:13,fontWeight:600,cursor:"pointer",padding:0}}>
+                {showCompleted ? "× Hide" : "↓ Show"} {completedTasks.length} completed
+              </button>
+            </div>
+          )}
+
+          {showCompleted && completedTasks.length>0 && (
+            <>
+              <div style={{padding:"12px 20px 6px",fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",background:"#FAFAFA"}}>Completed · tap to reactivate</div>
+              {completedTasks.map(t=>(
+                <TaskRow key={t.key} task={t} dayNum={null} isDone={true} isEditing={editingKey===t.key}
+                  assignedE={assignedE[t.key]} assignedC={assignedC[t.key]} cc={cc}
+                  onToggle={()=>onToggle(t.key)}
+                  onPing={()=>onPing(t, null)}
+                  onLongPress={()=>onLongPress(t)}
+                  onEditSave={text=>onEditSave(t,text)}
+                  onEditCancel={onEditCancel}/>
+              ))}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
