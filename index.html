@@ -207,14 +207,14 @@ function useEdgeSwipeBack(onBack, enabled){
   useEffect(()=>{
     if(!enabled) return;
     let startX=0, startY=0, dragging=false, deltaX=0, startTime=0;
-    const EDGE = 28;
+    const EDGE = 44; // generous edge zone for thumb reach
     const getEl = ()=>ref.current;
     let pendingTimer = null;
 
     const resetEl = (transition)=>{
       const el = getEl(); if(!el) return;
       el.style.transition = transition || 'none';
-      el.style.transform = '';
+      el.style.transform = 'translateX(0)';
     };
 
     const onStart = (e)=>{
@@ -222,7 +222,10 @@ function useEdgeSwipeBack(onBack, enabled){
       if(t.clientX > EDGE) return;
       const el = getEl();
       if(!el) return;
-      if(!el.contains(e.target)) return;
+      // Note: do NOT check el.contains(e.target) — the body has padding,
+      // so edge touches land on the parent, not the wrapper. We rely on
+      // the `enabled` flag (passed from App) to gate the gesture when
+      // sheets / modals are open.
       if(pendingTimer){ clearTimeout(pendingTimer); pendingTimer = null; }
       startX = t.clientX; startY = t.clientY;
       dragging = true; deltaX = 0; startTime = Date.now();
@@ -252,7 +255,7 @@ function useEdgeSwipeBack(onBack, enabled){
       if(!el) return;
       const elapsed = Date.now() - startTime;
       const velocity = deltaX / Math.max(elapsed, 1);
-      const shouldCommit = deltaX > window.innerWidth * 0.35 || (velocity > 0.6 && deltaX > 40);
+      const shouldCommit = deltaX > window.innerWidth * 0.25 || (velocity > 0.4 && deltaX > 30);
       el.style.transition = 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)';
       if(shouldCommit){
         el.style.transform = `translateX(${window.innerWidth}px)`;
@@ -681,7 +684,8 @@ function App(){
     if(activeDay) setActiveDay(null);
     else if(activeOther) setActiveOther(false);
   },[activeDay, activeOther]);
-  const pageRef = useEdgeSwipeBack(handleSwipeBack, !!(activeDay || activeOther));
+  const anySheetOpen = !!menuTask || !!personView || syncOpen || showDeviceSetup;
+  const pageRef = useEdgeSwipeBack(handleSwipeBack, !!(activeDay || activeOther) && !anySheetOpen);
 
   return(
     <div style={s.wrap}>
@@ -703,7 +707,7 @@ function App(){
       </div>
       <div style={s.body}>
         {(activeDay || activeOther) ? (
-          <div ref={pageRef} key={activeOther ? "other" : `day-${activeDay.day}`} style={{willChange:"transform",transform:"translateX(0)"}}>
+          <div ref={pageRef} key={activeOther ? "other" : `day-${activeDay.day}`} style={{willChange:"transform",transform:"translateX(0)",background:"#F2F2F7",boxShadow:"-3px 0 18px rgba(0,0,0,0.08)",borderRadius:"0",minHeight:"calc(100vh - 200px)"}}>
             {activeDay
               ? <DayDetail
                   d={activeDay}
