@@ -169,6 +169,52 @@ function isOtherKey(key){
   return typeof key === "string" && key.startsWith("other-");
 }
 
+function sharePersonTasks(theme, grouped, otherAssigned, checked){
+  const lines = [];
+  lines.push(`📋 ${theme.name}'s tasks — Lilianfeld 30-Day Plan`);
+  lines.push("");
+
+  const dayTotal = grouped.reduce((a,g)=>a+g.tasks.length,0);
+  const dayDone  = grouped.reduce((a,g)=>a+g.tasks.filter(t=>checked[t.key]).length,0);
+  const otherDone = otherAssigned.filter(t=>checked[t.key]).length;
+  const grandTotal = dayTotal + otherAssigned.length;
+  const grandDone  = dayDone + otherDone;
+
+  lines.push(`✅ ${grandDone} done · ⬜ ${grandTotal-grandDone} to do (of ${grandTotal})`);
+  lines.push("");
+
+  if(grouped.length>0){
+    grouped.forEach(g=>{
+      const dd = g.tasks.filter(t=>checked[t.key]).length;
+      lines.push(`— Day ${g.day.day}: ${g.day.title}  (${g.day.cat}) — ${dd}/${g.tasks.length}`);
+      g.tasks.forEach(t=>{
+        lines.push(`  ${checked[t.key]?"✅":"⬜"} ${t.text}`);
+      });
+      lines.push("");
+    });
+  }
+
+  if(otherAssigned.length>0){
+    lines.push(`— Other Tasks — ${otherDone}/${otherAssigned.length}`);
+    otherAssigned.forEach(t=>{
+      lines.push(`  ${checked[t.key]?"✅":"⬜"} ${t.text}`);
+    });
+    lines.push("");
+  }
+
+  lines.push("🕯 Lilianfeld 30-Day Plan");
+
+  const text = lines.join("\n");
+
+  if(navigator.share){
+    navigator.share({title:`${theme.name}'s tasks`, text}).catch(()=>{});
+  } else if(navigator.clipboard){
+    navigator.clipboard.writeText(text).then(()=>alert("Copied to clipboard")).catch(()=>prompt("Copy this:",text));
+  } else {
+    prompt("Copy this:",text);
+  }
+}
+
 /* ---------- Send Icon ---------- */
 function SendIcon({size=14,color="currentColor"}){
   return (
@@ -474,8 +520,13 @@ function App(){
   const pct=totals.total?Math.round(totals.done/totals.total*100):0;
   const W=WEEKS[week];
   const weekDays=DAYS.filter(d=>d.week===week);
-  const weekECount = weekDays.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedE[t.key]).length,0);
-  const weekCCount = weekDays.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedC[t.key]).length,0);
+  // Pending count = unchecked tasks (plan + other) assigned to that person
+  const pendingECount =
+    DAYS.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedE[t.key] && !checked[t.key]).length,0) +
+    otherEffectiveTasks(otherTasks).filter(t=>assignedE[t.key] && !checked[t.key]).length;
+  const pendingCCount =
+    DAYS.reduce((a,d)=>a+effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedC[t.key] && !checked[t.key]).length,0) +
+    otherEffectiveTasks(otherTasks).filter(t=>assignedC[t.key] && !checked[t.key]).length;
   const otherC = otherCounts(otherTasks, checked);
 
   const s={
@@ -573,8 +624,8 @@ function App(){
             </button>
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-              <PersonButton person="e" count={weekECount} onClick={()=>setPersonView("e")}/>
-              <PersonButton person="c" count={weekCCount} onClick={()=>setPersonView("c")}/>
+              <PersonButton person="e" count={pendingECount} onClick={()=>setPersonView("e")}/>
+              <PersonButton person="c" count={pendingCCount} onClick={()=>setPersonView("c")}/>
             </div>
 
             <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.08)",marginBottom:16}}>
@@ -695,7 +746,7 @@ function PersonButton({person, count, onClick}){
       <div style={{width:36,height:36,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,fontWeight:700,flexShrink:0}}>{t.initial}</div>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:11,fontWeight:700,color:t.text,letterSpacing:0.4,textTransform:"uppercase"}}>{t.name}</div>
-        <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E",marginTop:1}}>{count} {count===1?"task":"tasks"} this week</div>
+        <div style={{fontSize:13,fontWeight:600,color:"#1C1C1E",marginTop:1}}>{count===0?"All caught up":`${count} to do`}</div>
       </div>
       <span style={{color:t.text,fontSize:18,fontWeight:700,flexShrink:0}}>›</span>
     </button>
@@ -705,9 +756,8 @@ function PersonButton({person, count, onClick}){
 /* ---------- Person tasks sheet ---------- */
 function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,overrides,deleted,assignedE,assignedC,onToggle,onPing,onOpenDay,onOpenOther,onClose}){
   const t = personTheme(person);
-  const [scope, setScope] = useState("week");
   const [showCompletedOther, setShowCompletedOther] = useState(false);
-  const days = DAYS.filter(d => scope==="all" ? true : d.week===currentWeek);
+  const days = DAYS;
   const assignedMap = person==="e" ? assignedE : assignedC;
   const grouped = days.map(d=>{
     const tasks = effectiveTasks(d,overrides,deleted,custom).filter(t=>assignedMap[t.key]);
@@ -730,19 +780,20 @@ function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,override
       <div onClick={e=>e.stopPropagation()} style={{background:"#F2F2F7",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"16px 0 0",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
         <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px",flexShrink:0}}/>
         <div style={{padding:"0 20px 12px",flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
             <div style={{width:42,height:42,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,fontWeight:700,flexShrink:0}}>{t.initial}</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.3}}>{t.name}'s Tasks</div>
-              <div style={{fontSize:12,color:"#8E8E93",marginTop:1}}>{doneCount}/{totalCount} done</div>
+              <div style={{fontSize:12,color:"#8E8E93",marginTop:1}}>{doneCount}/{totalCount} done · all 30 days</div>
             </div>
             <button onClick={onClose} style={{background:"#E5E5EA",border:"none",borderRadius:"50%",width:30,height:30,fontSize:16,color:"#8E8E93",cursor:"pointer",flexShrink:0,fontWeight:600,lineHeight:1}}>×</button>
           </div>
-          <div style={{display:"flex",background:"#E5E5EA",borderRadius:10,padding:2,gap:0}}>
-            {["week","all"].map(opt=>(
-              <button key={opt} onClick={()=>setScope(opt)} style={{flex:1,background:scope===opt?"#fff":"transparent",border:"none",borderRadius:8,padding:"7px 12px",fontSize:13,fontWeight:600,color:scope===opt?"#1C1C1E":"#8E8E93",cursor:"pointer",boxShadow:scope===opt?"0 1px 2px rgba(0,0,0,0.1)":"none"}}>{opt==="week"?`Week ${currentWeek+1}`:"All 30 days"}</button>
-            ))}
-          </div>
+          {(grouped.length>0 || otherAssigned.length>0) && (
+            <button onClick={()=>sharePersonTasks(t, grouped, otherAssigned, checked)}
+              style={{width:"100%",background:t.bg,border:`1px solid ${t.border}`,borderRadius:12,padding:"10px 14px",fontSize:13,fontWeight:600,color:t.text,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              <SendIcon size={14}/> Share {t.name}'s task list
+            </button>
+          )}
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"4px 16px 24px"}}>
           {grouped.length===0 && otherAssigned.length===0
