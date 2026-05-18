@@ -197,23 +197,33 @@ function sharePersonTasks(theme, grouped, otherAssigned, checked){
 /* ---------- Gesture hooks ---------- */
 // Edge-swipe-back: swipe right from left edge to go back. Page slides with finger.
 // Listens on document so edge touches register even when the wrapper has padding.
+// Listeners attach ONCE per enabled cycle (not on every callback change) so a
+// mid-swipe state-change re-render doesn't strand the gesture.
 function useEdgeSwipeBack(onBack, enabled){
   const ref = useRef(null);
+  const onBackRef = useRef(onBack);
+  useEffect(()=>{ onBackRef.current = onBack; }, [onBack]);
+
   useEffect(()=>{
     if(!enabled) return;
     let startX=0, startY=0, dragging=false, deltaX=0, startTime=0;
     const EDGE = 28;
-
     const getEl = ()=>ref.current;
+    let pendingTimer = null;
+
+    const resetEl = (transition)=>{
+      const el = getEl(); if(!el) return;
+      el.style.transition = transition || 'none';
+      el.style.transform = '';
+    };
 
     const onStart = (e)=>{
       const t = e.touches[0];
       if(t.clientX > EDGE) return;
       const el = getEl();
       if(!el) return;
-      // Don't start the gesture if the touch target is inside an open overlay/sheet
-      // (overlays sit on top of the page, outside our ref'd wrapper).
       if(!el.contains(e.target)) return;
+      if(pendingTimer){ clearTimeout(pendingTimer); pendingTimer = null; }
       startX = t.clientX; startY = t.clientY;
       dragging = true; deltaX = 0; startTime = Date.now();
       el.style.transition = 'none';
@@ -221,14 +231,14 @@ function useEdgeSwipeBack(onBack, enabled){
     const onMove = (e)=>{
       if(!dragging) return;
       const el = getEl();
-      if(!el) return;
+      if(!el){ dragging = false; return; }
       const t = e.touches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
       if(Math.abs(dy) > Math.abs(dx) + 12){
         dragging = false;
         el.style.transition = 'transform 0.18s ease-out';
-        el.style.transform = '';
+        el.style.transform = 'translateX(0)';
         return;
       }
       if(dx < 0){ deltaX = 0; el.style.transform = 'translateX(0px)'; return; }
@@ -241,14 +251,17 @@ function useEdgeSwipeBack(onBack, enabled){
       const el = getEl();
       if(!el) return;
       const elapsed = Date.now() - startTime;
-      const velocity = deltaX / Math.max(elapsed, 1); // px/ms
+      const velocity = deltaX / Math.max(elapsed, 1);
       const shouldCommit = deltaX > window.innerWidth * 0.35 || (velocity > 0.6 && deltaX > 40);
       el.style.transition = 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)';
       if(shouldCommit){
         el.style.transform = `translateX(${window.innerWidth}px)`;
-        setTimeout(()=>onBack(), 180);
+        pendingTimer = setTimeout(()=>{
+          pendingTimer = null;
+          onBackRef.current();
+        }, 180);
       } else {
-        el.style.transform = '';
+        el.style.transform = 'translateX(0)';
       }
     };
 
@@ -257,12 +270,14 @@ function useEdgeSwipeBack(onBack, enabled){
     document.addEventListener('touchend', onEnd);
     document.addEventListener('touchcancel', onEnd);
     return ()=>{
+      if(pendingTimer){ clearTimeout(pendingTimer); pendingTimer = null; }
+      resetEl(); // ensure no stuck transform when listeners detach
       document.removeEventListener('touchstart', onStart);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('touchend', onEnd);
       document.removeEventListener('touchcancel', onEnd);
     };
-  }, [enabled, onBack]);
+  }, [enabled]); // deliberately exclude onBack — read via ref instead
   return ref;
 }
 
@@ -271,13 +286,19 @@ function useEdgeSwipeBack(onBack, enabled){
 function useSwipeDownDismiss(onClose){
   const sheetRef = useRef(null);
   const handleRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(()=>{ onCloseRef.current = onClose; }, [onClose]);
+
   useEffect(()=>{
     const sheet = sheetRef.current;
     const handle = handleRef.current;
     if(!sheet || !handle) return;
     let startY=0, startX=0, dragging=false, deltaY=0, startTime=0;
+    let pendingTimer = null;
+
     const onStart = (e)=>{
       const t = e.touches[0];
+      if(pendingTimer){ clearTimeout(pendingTimer); pendingTimer = null; }
       startY = t.clientY; startX = t.clientX;
       dragging = true; deltaY = 0; startTime = Date.now();
       sheet.style.transition = 'none';
@@ -287,11 +308,10 @@ function useSwipeDownDismiss(onClose){
       const t = e.touches[0];
       const dy = t.clientY - startY;
       const dx = t.clientX - startX;
-      // If clearly horizontal, cancel
       if(Math.abs(dx) > Math.abs(dy) + 14){
         dragging = false;
         sheet.style.transition = 'transform 0.18s ease-out';
-        sheet.style.transform = '';
+        sheet.style.transform = 'translateY(0)';
         return;
       }
       if(dy < 0){ deltaY = 0; sheet.style.transform = 'translateY(0)'; return; }
@@ -302,28 +322,33 @@ function useSwipeDownDismiss(onClose){
       if(!dragging) return;
       dragging = false;
       const elapsed = Date.now() - startTime;
-      const velocity = deltaY / Math.max(elapsed, 1); // px/ms
+      const velocity = deltaY / Math.max(elapsed, 1);
       const distanceThreshold = Math.min(sheet.offsetHeight * 0.22, 100);
       const shouldDismiss = deltaY > distanceThreshold || (velocity > 0.5 && deltaY > 30);
       sheet.style.transition = 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)';
       if(shouldDismiss){
         sheet.style.transform = `translateY(${sheet.offsetHeight}px)`;
-        setTimeout(()=>onClose(), 180);
+        pendingTimer = setTimeout(()=>{
+          pendingTimer = null;
+          onCloseRef.current();
+        }, 180);
       } else {
-        sheet.style.transform = '';
+        sheet.style.transform = 'translateY(0)';
       }
     };
+
     handle.addEventListener('touchstart', onStart, {passive: true});
     handle.addEventListener('touchmove', onMove, {passive: true});
     handle.addEventListener('touchend', onEnd);
     handle.addEventListener('touchcancel', onEnd);
     return ()=>{
+      if(pendingTimer){ clearTimeout(pendingTimer); pendingTimer = null; }
       handle.removeEventListener('touchstart', onStart);
       handle.removeEventListener('touchmove', onMove);
       handle.removeEventListener('touchend', onEnd);
       handle.removeEventListener('touchcancel', onEnd);
     };
-  }, [onClose]);
+  }, []); // attach once per sheet; onClose read from ref
   return { sheetRef, handleRef };
 }
 
@@ -678,7 +703,7 @@ function App(){
       </div>
       <div style={s.body}>
         {(activeDay || activeOther) ? (
-          <div ref={pageRef} style={{willChange:"transform"}}>
+          <div ref={pageRef} key={activeOther ? "other" : `day-${activeDay.day}`} style={{willChange:"transform",transform:"translateX(0)"}}>
             {activeDay
               ? <DayDetail
                   d={activeDay}
