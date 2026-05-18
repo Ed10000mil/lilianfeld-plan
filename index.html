@@ -170,41 +170,20 @@ function isOtherKey(key){
 }
 
 function sharePersonTasks(theme, grouped, otherAssigned, checked){
-  const lines = [];
-  lines.push(`📋 ${theme.name}'s tasks — Lilianfeld 30-Day Plan`);
-  lines.push("");
-
-  const dayTotal = grouped.reduce((a,g)=>a+g.tasks.length,0);
-  const dayDone  = grouped.reduce((a,g)=>a+g.tasks.filter(t=>checked[t.key]).length,0);
-  const otherDone = otherAssigned.filter(t=>checked[t.key]).length;
-  const grandTotal = dayTotal + otherAssigned.length;
-  const grandDone  = dayDone + otherDone;
-
-  lines.push(`✅ ${grandDone} done · ⬜ ${grandTotal-grandDone} to do (of ${grandTotal})`);
-  lines.push("");
-
-  if(grouped.length>0){
-    grouped.forEach(g=>{
-      const dd = g.tasks.filter(t=>checked[t.key]).length;
-      lines.push(`— Day ${g.day.day}: ${g.day.title}  (${g.day.cat}) — ${dd}/${g.tasks.length}`);
-      g.tasks.forEach(t=>{
-        lines.push(`  ${checked[t.key]?"✅":"⬜"} ${t.text}`);
-      });
-      lines.push("");
+  // Collect only pending (not-done) tasks — flat list, no day labels
+  const pending = [];
+  grouped.forEach(g=>{
+    g.tasks.forEach(t=>{
+      if(!checked[t.key]) pending.push(t.text);
     });
-  }
+  });
+  otherAssigned.forEach(t=>{
+    if(!checked[t.key]) pending.push(t.text);
+  });
 
-  if(otherAssigned.length>0){
-    lines.push(`— Other Tasks — ${otherDone}/${otherAssigned.length}`);
-    otherAssigned.forEach(t=>{
-      lines.push(`  ${checked[t.key]?"✅":"⬜"} ${t.text}`);
-    });
-    lines.push("");
-  }
-
-  lines.push("🕯 Lilianfeld 30-Day Plan");
-
-  const text = lines.join("\n");
+  const text = pending.length === 0
+    ? `${theme.name}'s tasks:\n\nAll done 🎉`
+    : `${theme.name}'s tasks:\n\n` + pending.map(t=>`• ${t}`).join("\n");
 
   if(navigator.share){
     navigator.share({title:`${theme.name}'s tasks`, text}).catch(()=>{});
@@ -213,6 +192,111 @@ function sharePersonTasks(theme, grouped, otherAssigned, checked){
   } else {
     prompt("Copy this:",text);
   }
+}
+
+/* ---------- Gesture hooks ---------- */
+// Edge-swipe-back: swipe right from left edge to go back. Page slides with finger.
+function useEdgeSwipeBack(onBack, enabled){
+  const ref = useRef(null);
+  useEffect(()=>{
+    if(!enabled) return;
+    const el = ref.current;
+    if(!el) return;
+    let startX=0, startY=0, dragging=false, deltaX=0;
+    const EDGE = 25;
+    const onStart = (e)=>{
+      const t = e.touches[0];
+      if(t.clientX > EDGE) return;
+      startX = t.clientX; startY = t.clientY;
+      dragging = true; deltaX = 0;
+      el.style.transition = 'none';
+    };
+    const onMove = (e)=>{
+      if(!dragging) return;
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if(Math.abs(dy) > Math.abs(dx) + 10){
+        dragging = false;
+        el.style.transition = 'transform 0.2s ease-out';
+        el.style.transform = '';
+        return;
+      }
+      if(dx < 0){ deltaX = 0; el.style.transform = 'translateX(0px)'; return; }
+      deltaX = dx;
+      el.style.transform = `translateX(${dx}px)`;
+    };
+    const onEnd = ()=>{
+      if(!dragging) return;
+      dragging = false;
+      el.style.transition = 'transform 0.25s ease-out';
+      if(deltaX > window.innerWidth * 0.4){
+        el.style.transform = `translateX(${window.innerWidth}px)`;
+        setTimeout(()=>onBack(), 200);
+      } else {
+        el.style.transform = '';
+      }
+    };
+    el.addEventListener('touchstart', onStart, {passive: true});
+    el.addEventListener('touchmove', onMove, {passive: true});
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return ()=>{
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, [enabled, onBack]);
+  return ref;
+}
+
+// Swipe-down on a sheet's drag handle to dismiss.
+function useSwipeDownDismiss(onClose){
+  const sheetRef = useRef(null);
+  const handleRef = useRef(null);
+  useEffect(()=>{
+    const sheet = sheetRef.current;
+    const handle = handleRef.current;
+    if(!sheet || !handle) return;
+    let startY=0, dragging=false, deltaY=0;
+    const onStart = (e)=>{
+      const t = e.touches[0];
+      startY = t.clientY;
+      dragging = true; deltaY = 0;
+      sheet.style.transition = 'none';
+    };
+    const onMove = (e)=>{
+      if(!dragging) return;
+      const t = e.touches[0];
+      const dy = t.clientY - startY;
+      if(dy < 0){ deltaY = 0; sheet.style.transform = 'translateY(0)'; return; }
+      deltaY = dy;
+      sheet.style.transform = `translateY(${dy}px)`;
+    };
+    const onEnd = ()=>{
+      if(!dragging) return;
+      dragging = false;
+      sheet.style.transition = 'transform 0.25s ease-out';
+      if(deltaY > Math.min(sheet.offsetHeight*0.3, 140)){
+        sheet.style.transform = `translateY(${sheet.offsetHeight}px)`;
+        setTimeout(()=>onClose(), 180);
+      } else {
+        sheet.style.transform = '';
+      }
+    };
+    handle.addEventListener('touchstart', onStart, {passive: true});
+    handle.addEventListener('touchmove', onMove, {passive: true});
+    handle.addEventListener('touchend', onEnd);
+    handle.addEventListener('touchcancel', onEnd);
+    return ()=>{
+      handle.removeEventListener('touchstart', onStart);
+      handle.removeEventListener('touchmove', onMove);
+      handle.removeEventListener('touchend', onEnd);
+      handle.removeEventListener('touchcancel', onEnd);
+    };
+  }, [onClose]);
+  return { sheetRef, handleRef };
 }
 
 /* ---------- Send Icon ---------- */
@@ -540,6 +624,12 @@ function App(){
     : (activeOther ? "Other Tasks" : "30-Day Plan");
   const headerAccent = activeOther ? OTHER_ACCENT : W.accent;
 
+  const handleSwipeBack = useCallback(()=>{
+    if(activeDay) setActiveDay(null);
+    else if(activeOther) setActiveOther(false);
+  },[activeDay, activeOther]);
+  const pageRef = useEdgeSwipeBack(handleSwipeBack, !!(activeDay || activeOther));
+
   return(
     <div style={s.wrap}>
       {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1C1C1E",color:"#fff",fontSize:13,fontWeight:500,padding:"9px 18px",borderRadius:99,zIndex:1100,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap",maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis"}}>{toast}</div>}
@@ -559,37 +649,39 @@ function App(){
         </div>
       </div>
       <div style={s.body}>
-        {activeDay
-          ? <DayDetail
-              d={activeDay}
-              checked={checked} custom={custom}
-              overrides={overrides} deleted={deleted}
-              assignedE={assignedE} assignedC={assignedC}
-              note={notes[activeDay.day]||""}
-              editingKey={editingKey}
-              onToggle={toggle}
-              onPing={sendPing}
-              onLongPress={(taskObj)=>setMenuTask({dayObj:activeDay, taskObj})}
-              onAddCustom={text=>addCustomTask(activeDay.day,text)}
-              onNoteChange={text=>saveNote(activeDay.day,text)}
-              onEditSave={(taskObj,text)=>{editTask(taskObj,text,activeDay.day);setEditingKey(null);}}
-              onEditCancel={()=>setEditingKey(null)}
-              onRestoreDeleted={()=>restoreDeletedForDay(activeDay.day)}
-              onBack={()=>setActiveDay(null)}/>
-          : activeOther
-          ? <OtherTasksDetail
-              tasks={otherEffectiveTasks(otherTasks)}
-              checked={checked}
-              assignedE={assignedE} assignedC={assignedC}
-              editingKey={editingKey}
-              onToggle={toggle}
-              onPing={sendPing}
-              onLongPress={(taskObj)=>setMenuTask({dayObj:null, taskObj, isOther:true})}
-              onAdd={addOtherTask}
-              onEditSave={(taskObj,text)=>{editTask(taskObj,text);setEditingKey(null);}}
-              onEditCancel={()=>setEditingKey(null)}
-              onBack={()=>setActiveOther(false)}/>
-          : <>
+        {(activeDay || activeOther) ? (
+          <div ref={pageRef} style={{willChange:"transform"}}>
+            {activeDay
+              ? <DayDetail
+                  d={activeDay}
+                  checked={checked} custom={custom}
+                  overrides={overrides} deleted={deleted}
+                  assignedE={assignedE} assignedC={assignedC}
+                  note={notes[activeDay.day]||""}
+                  editingKey={editingKey}
+                  onToggle={toggle}
+                  onPing={sendPing}
+                  onLongPress={(taskObj)=>setMenuTask({dayObj:activeDay, taskObj})}
+                  onAddCustom={text=>addCustomTask(activeDay.day,text)}
+                  onNoteChange={text=>saveNote(activeDay.day,text)}
+                  onEditSave={(taskObj,text)=>{editTask(taskObj,text,activeDay.day);setEditingKey(null);}}
+                  onEditCancel={()=>setEditingKey(null)}
+                  onRestoreDeleted={()=>restoreDeletedForDay(activeDay.day)}
+                  onBack={()=>setActiveDay(null)}/>
+              : <OtherTasksDetail
+                  tasks={otherEffectiveTasks(otherTasks)}
+                  checked={checked}
+                  assignedE={assignedE} assignedC={assignedC}
+                  editingKey={editingKey}
+                  onToggle={toggle}
+                  onPing={sendPing}
+                  onLongPress={(taskObj)=>setMenuTask({dayObj:null, taskObj, isOther:true})}
+                  onAdd={addOtherTask}
+                  onEditSave={(taskObj,text)=>{editTask(taskObj,text);setEditingKey(null);}}
+                  onEditCancel={()=>setEditingKey(null)}
+                  onBack={()=>setActiveOther(false)}/>}
+          </div>
+        ) : <>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
               {WEEKS.map((wk,i)=>{
                 const wDs=DAYS.filter(d=>d.week===i);
@@ -756,6 +848,7 @@ function PersonButton({person, count, onClick}){
 /* ---------- Person tasks sheet ---------- */
 function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,overrides,deleted,assignedE,assignedC,onToggle,onPing,onOpenDay,onOpenOther,onClose}){
   const t = personTheme(person);
+  const {sheetRef, handleRef} = useSwipeDownDismiss(onClose);
   const [showCompleted, setShowCompleted] = useState(false);
   const days = DAYS;
   const assignedMap = person==="e" ? assignedE : assignedC;
@@ -789,8 +882,10 @@ function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,override
 
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#F2F2F7",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"16px 0 0",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
-        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px",flexShrink:0}}/>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#F2F2F7",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"16px 0 0",maxHeight:"92vh",display:"flex",flexDirection:"column",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"6px 0 8px",margin:"-6px 0 4px",cursor:"grab",touchAction:"none",flexShrink:0}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
+        </div>
         <div style={{padding:"0 20px 12px",flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
             <div style={{width:42,height:42,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,fontWeight:700,flexShrink:0}}>{t.initial}</div>
@@ -895,6 +990,7 @@ function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,override
 
 /* ---------- Long-press action sheet ---------- */
 function TaskActionSheet({task,dayObj,isOther,assignedE,assignedC,onEdit,onAssignE,onAssignC,onPing,onDelete,onClose}){
+  const {sheetRef, handleRef} = useSwipeDownDismiss(onClose);
   const targets = [];
   if(assignedE) targets.push("e");
   if(assignedC) targets.push("c");
@@ -904,8 +1000,10 @@ function TaskActionSheet({task,dayObj,isOther,assignedE,assignedC,onEdit,onAssig
     : `Day ${dayObj?.day || "?"} · ${dayObj?.title || ""}`;
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"14px 0 env(safe-area-inset-bottom,16px)"}}>
-        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 12px"}}/>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"14px 0 env(safe-area-inset-bottom,16px)",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"4px 0 8px",margin:"-4px 0 4px",cursor:"grab",touchAction:"none"}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
+        </div>
         <div style={{padding:"0 20px 12px",borderBottom:"1px solid #F2F2F7"}}>
           <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:4}}>{eyebrow}</div>
           <div style={{fontSize:14,color:"#1C1C1E",lineHeight:1.4}}>{task.text}</div>
@@ -937,11 +1035,14 @@ function PersonDot({p}){
 
 /* ---------- Device setup ---------- */
 function DeviceSetupSheet({currentPerson, hasToken, busy, onPick, onClose}){
+  const {sheetRef, handleRef} = useSwipeDownDismiss(onClose);
   const isChanging = hasToken && !!currentPerson;
   return (
     <div onClick={busy?undefined:onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1050,display:"flex",alignItems:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"16px 20px env(safe-area-inset-bottom,16px)"}}>
-        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 14px"}}/>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"16px 20px env(safe-area-inset-bottom,16px)",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"4px 0 10px",margin:"-4px 0 4px",cursor:"grab",touchAction:"none"}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
+        </div>
         <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>{isChanging?"Change device identity":"Enable notifications"}</div>
         <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>{isChanging?"Tell the app who's using this device so the right person gets pinged for assigned tasks.":"To receive pings on this device, tell us who's using it. You'll only be pinged for tasks assigned to that person."}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
@@ -988,6 +1089,7 @@ function FooterBar({syncStatus,syncCode,device,accent,onSyncClick,onDeviceClick}
   );
 }
 function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,showToast}){
+  const {sheetRef, handleRef} = useSwipeDownDismiss(onClose);
   const[input,setInput]=useState("");
   const isSynced = status==="synced" && currentCode;
   const copyCode=()=>{
@@ -996,8 +1098,10 @@ function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,sh
   };
   return(
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"20px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto"}}>
-        <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 16px"}}/>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"20px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"4px 0 10px",margin:"-4px 0 6px",cursor:"grab",touchAction:"none"}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
+        </div>
         <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>Sync across devices</div>
         <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>Use the same sync code on multiple devices to keep your data in sync.</div>
         {isSynced&&(
