@@ -196,29 +196,38 @@ function sharePersonTasks(theme, grouped, otherAssigned, checked){
 
 /* ---------- Gesture hooks ---------- */
 // Edge-swipe-back: swipe right from left edge to go back. Page slides with finger.
+// Listens on document so edge touches register even when the wrapper has padding.
 function useEdgeSwipeBack(onBack, enabled){
   const ref = useRef(null);
   useEffect(()=>{
     if(!enabled) return;
-    const el = ref.current;
-    if(!el) return;
-    let startX=0, startY=0, dragging=false, deltaX=0;
-    const EDGE = 25;
+    let startX=0, startY=0, dragging=false, deltaX=0, startTime=0;
+    const EDGE = 28;
+
+    const getEl = ()=>ref.current;
+
     const onStart = (e)=>{
       const t = e.touches[0];
       if(t.clientX > EDGE) return;
+      const el = getEl();
+      if(!el) return;
+      // Don't start the gesture if the touch target is inside an open overlay/sheet
+      // (overlays sit on top of the page, outside our ref'd wrapper).
+      if(!el.contains(e.target)) return;
       startX = t.clientX; startY = t.clientY;
-      dragging = true; deltaX = 0;
+      dragging = true; deltaX = 0; startTime = Date.now();
       el.style.transition = 'none';
     };
     const onMove = (e)=>{
       if(!dragging) return;
+      const el = getEl();
+      if(!el) return;
       const t = e.touches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      if(Math.abs(dy) > Math.abs(dx) + 10){
+      if(Math.abs(dy) > Math.abs(dx) + 12){
         dragging = false;
-        el.style.transition = 'transform 0.2s ease-out';
+        el.style.transition = 'transform 0.18s ease-out';
         el.style.transform = '';
         return;
       }
@@ -229,29 +238,36 @@ function useEdgeSwipeBack(onBack, enabled){
     const onEnd = ()=>{
       if(!dragging) return;
       dragging = false;
-      el.style.transition = 'transform 0.25s ease-out';
-      if(deltaX > window.innerWidth * 0.4){
+      const el = getEl();
+      if(!el) return;
+      const elapsed = Date.now() - startTime;
+      const velocity = deltaX / Math.max(elapsed, 1); // px/ms
+      const shouldCommit = deltaX > window.innerWidth * 0.35 || (velocity > 0.6 && deltaX > 40);
+      el.style.transition = 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)';
+      if(shouldCommit){
         el.style.transform = `translateX(${window.innerWidth}px)`;
-        setTimeout(()=>onBack(), 200);
+        setTimeout(()=>onBack(), 180);
       } else {
         el.style.transform = '';
       }
     };
-    el.addEventListener('touchstart', onStart, {passive: true});
-    el.addEventListener('touchmove', onMove, {passive: true});
-    el.addEventListener('touchend', onEnd);
-    el.addEventListener('touchcancel', onEnd);
+
+    document.addEventListener('touchstart', onStart, {passive: true});
+    document.addEventListener('touchmove', onMove, {passive: true});
+    document.addEventListener('touchend', onEnd);
+    document.addEventListener('touchcancel', onEnd);
     return ()=>{
-      el.removeEventListener('touchstart', onStart);
-      el.removeEventListener('touchmove', onMove);
-      el.removeEventListener('touchend', onEnd);
-      el.removeEventListener('touchcancel', onEnd);
+      document.removeEventListener('touchstart', onStart);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
+      document.removeEventListener('touchcancel', onEnd);
     };
   }, [enabled, onBack]);
   return ref;
 }
 
-// Swipe-down on a sheet's drag handle to dismiss.
+// Swipe-down on a sheet's drag handle area to dismiss.
+// Velocity-aware: a quick flick dismisses even at short distance.
 function useSwipeDownDismiss(onClose){
   const sheetRef = useRef(null);
   const handleRef = useRef(null);
@@ -259,17 +275,25 @@ function useSwipeDownDismiss(onClose){
     const sheet = sheetRef.current;
     const handle = handleRef.current;
     if(!sheet || !handle) return;
-    let startY=0, dragging=false, deltaY=0;
+    let startY=0, startX=0, dragging=false, deltaY=0, startTime=0;
     const onStart = (e)=>{
       const t = e.touches[0];
-      startY = t.clientY;
-      dragging = true; deltaY = 0;
+      startY = t.clientY; startX = t.clientX;
+      dragging = true; deltaY = 0; startTime = Date.now();
       sheet.style.transition = 'none';
     };
     const onMove = (e)=>{
       if(!dragging) return;
       const t = e.touches[0];
       const dy = t.clientY - startY;
+      const dx = t.clientX - startX;
+      // If clearly horizontal, cancel
+      if(Math.abs(dx) > Math.abs(dy) + 14){
+        dragging = false;
+        sheet.style.transition = 'transform 0.18s ease-out';
+        sheet.style.transform = '';
+        return;
+      }
       if(dy < 0){ deltaY = 0; sheet.style.transform = 'translateY(0)'; return; }
       deltaY = dy;
       sheet.style.transform = `translateY(${dy}px)`;
@@ -277,8 +301,12 @@ function useSwipeDownDismiss(onClose){
     const onEnd = ()=>{
       if(!dragging) return;
       dragging = false;
-      sheet.style.transition = 'transform 0.25s ease-out';
-      if(deltaY > Math.min(sheet.offsetHeight*0.3, 140)){
+      const elapsed = Date.now() - startTime;
+      const velocity = deltaY / Math.max(elapsed, 1); // px/ms
+      const distanceThreshold = Math.min(sheet.offsetHeight * 0.22, 100);
+      const shouldDismiss = deltaY > distanceThreshold || (velocity > 0.5 && deltaY > 30);
+      sheet.style.transition = 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)';
+      if(shouldDismiss){
         sheet.style.transform = `translateY(${sheet.offsetHeight}px)`;
         setTimeout(()=>onClose(), 180);
       } else {
@@ -882,21 +910,19 @@ function PersonTasksSheet({person,currentWeek,checked,custom,otherTasks,override
 
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
-      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#F2F2F7",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"16px 0 0",maxHeight:"92vh",display:"flex",flexDirection:"column",willChange:"transform"}}>
-        <div ref={handleRef} style={{padding:"6px 0 8px",margin:"-6px 0 4px",cursor:"grab",touchAction:"none",flexShrink:0}}>
-          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
-        </div>
-        <div style={{padding:"0 20px 12px",flexShrink:0}}>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#F2F2F7",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"10px 0 0",maxHeight:"92vh",display:"flex",flexDirection:"column",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"10px 20px 14px",cursor:"grab",touchAction:"none",flexShrink:0}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 14px"}}/>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
             <div style={{width:42,height:42,borderRadius:"50%",background:t.solid,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,fontWeight:700,flexShrink:0}}>{t.initial}</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",letterSpacing:-0.3}}>{t.name}'s Tasks</div>
               <div style={{fontSize:12,color:"#8E8E93",marginTop:1}}>{doneCount}/{totalCount} done · all 30 days</div>
             </div>
-            <button onClick={onClose} style={{background:"#E5E5EA",border:"none",borderRadius:"50%",width:30,height:30,fontSize:16,color:"#8E8E93",cursor:"pointer",flexShrink:0,fontWeight:600,lineHeight:1}}>×</button>
+            <button onClick={(e)=>{e.stopPropagation();onClose();}} style={{background:"#E5E5EA",border:"none",borderRadius:"50%",width:30,height:30,fontSize:16,color:"#8E8E93",cursor:"pointer",flexShrink:0,fontWeight:600,lineHeight:1}}>×</button>
           </div>
           {(grouped.length>0 || otherAssigned.length>0) && (
-            <button onClick={()=>sharePersonTasks(t, grouped, otherAssigned, checked)}
+            <button onClick={(e)=>{e.stopPropagation();sharePersonTasks(t, grouped, otherAssigned, checked);}}
               style={{width:"100%",background:t.bg,border:`1px solid ${t.border}`,borderRadius:12,padding:"10px 14px",fontSize:13,fontWeight:600,color:t.text,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
               <SendIcon size={14}/> Share {t.name}'s task list
             </button>
@@ -1000,11 +1026,9 @@ function TaskActionSheet({task,dayObj,isOther,assignedE,assignedC,onEdit,onAssig
     : `Day ${dayObj?.day || "?"} · ${dayObj?.title || ""}`;
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
-      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"14px 0 env(safe-area-inset-bottom,16px)",willChange:"transform"}}>
-        <div ref={handleRef} style={{padding:"4px 0 8px",margin:"-4px 0 4px",cursor:"grab",touchAction:"none"}}>
-          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
-        </div>
-        <div style={{padding:"0 20px 12px",borderBottom:"1px solid #F2F2F7"}}>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"10px 0 env(safe-area-inset-bottom,16px)",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"6px 20px 14px",cursor:"grab",touchAction:"none",borderBottom:"1px solid #F2F2F7"}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 14px"}}/>
           <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",letterSpacing:0.5,textTransform:"uppercase",marginBottom:4}}>{eyebrow}</div>
           <div style={{fontSize:14,color:"#1C1C1E",lineHeight:1.4}}>{task.text}</div>
         </div>
@@ -1039,12 +1063,15 @@ function DeviceSetupSheet({currentPerson, hasToken, busy, onPick, onClose}){
   const isChanging = hasToken && !!currentPerson;
   return (
     <div onClick={busy?undefined:onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1050,display:"flex",alignItems:"flex-end"}}>
-      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"16px 20px env(safe-area-inset-bottom,16px)",willChange:"transform"}}>
-        <div ref={handleRef} style={{padding:"4px 0 10px",margin:"-4px 0 4px",cursor:"grab",touchAction:"none"}}>
-          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:20,borderTopRightRadius:20,padding:"10px 20px env(safe-area-inset-bottom,16px)",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"6px 0 14px",margin:"0 -20px",cursor:"grab",touchAction:"none"}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 14px"}}/>
+          <div style={{padding:"0 20px"}}>
+            <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>{isChanging?"Change device identity":"Enable notifications"}</div>
+            <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5}}>{isChanging?"Tell the app who's using this device so the right person gets pinged for assigned tasks.":"To receive pings on this device, tell us who's using it. You'll only be pinged for tasks assigned to that person."}</div>
+          </div>
         </div>
-        <div style={{fontSize:18,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>{isChanging?"Change device identity":"Enable notifications"}</div>
-        <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>{isChanging?"Tell the app who's using this device so the right person gets pinged for assigned tasks.":"To receive pings on this device, tell us who's using it. You'll only be pinged for tasks assigned to that person."}</div>
+        <div style={{height:4}}/>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
           {["e","c"].map(p=>{
             const t = personTheme(p);
@@ -1098,12 +1125,15 @@ function SyncModal({currentCode,status,accent,onActivate,onDisconnect,onClose,sh
   };
   return(
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}}>
-      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"20px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto",willChange:"transform"}}>
-        <div ref={handleRef} style={{padding:"4px 0 10px",margin:"-4px 0 6px",cursor:"grab",touchAction:"none"}}>
-          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto"}}/>
+      <div ref={sheetRef} onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",maxWidth:430,margin:"0 auto",borderTopLeftRadius:24,borderTopRightRadius:24,padding:"10px 20px env(safe-area-inset-bottom,20px)",maxHeight:"90vh",overflowY:"auto",willChange:"transform"}}>
+        <div ref={handleRef} style={{padding:"6px 0 14px",margin:"0 -20px",cursor:"grab",touchAction:"none"}}>
+          <div style={{width:40,height:5,background:"#D1D1D6",borderRadius:99,margin:"0 auto 14px"}}/>
+          <div style={{padding:"0 20px"}}>
+            <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>Sync across devices</div>
+            <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5}}>Use the same sync code on multiple devices to keep your data in sync.</div>
+          </div>
         </div>
-        <div style={{fontSize:20,fontWeight:700,color:"#1C1C1E",marginBottom:6,letterSpacing:-0.3}}>Sync across devices</div>
-        <div style={{fontSize:13,color:"#8E8E93",lineHeight:1.5,marginBottom:18}}>Use the same sync code on multiple devices to keep your data in sync.</div>
+        <div style={{height:4}}/>
         {isSynced&&(
           <div style={{background:`${accent}10`,border:`1px solid ${accent}30`,borderRadius:14,padding:"14px 16px",marginBottom:16}}>
             <div style={{fontSize:11,fontWeight:700,color:accent,letterSpacing:0.5,textTransform:"uppercase",marginBottom:6}}>☁️ Currently synced</div>
